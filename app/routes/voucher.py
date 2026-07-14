@@ -18,6 +18,7 @@ from app.models.voucher import Voucher
 from app.schemas.voucher import (
     ResgateVoucherResponse,
     VoucherCreate,
+    VoucherUpdate,
     VoucherResponse,
 )
 
@@ -68,6 +69,43 @@ def criar_voucher(
     db.commit()
     db.refresh(voucher)
     return voucher
+
+
+@router.put("/{voucher_id}", response_model=VoucherResponse)
+def atualizar_voucher(
+    voucher_id: int,
+    payload: VoucherUpdate,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Atualiza um voucher existente."""
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+    if not voucher:
+        raise_not_found("Voucher nao encontrado.")
+
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(voucher, key, value)
+
+    db.commit()
+    db.refresh(voucher)
+    return voucher
+
+
+@router.delete("/{voucher_id}", status_code=204)
+def deletar_voucher(
+    voucher_id: int,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Remove um voucher."""
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+    if not voucher:
+        raise_not_found("Voucher nao encontrado.")
+
+    db.delete(voucher)
+    db.commit()
+    return None
 
 
 @router.post("/{voucher_id}/resgatar", response_model=ResgateVoucherResponse, status_code=201)
