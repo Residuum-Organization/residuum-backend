@@ -1,7 +1,7 @@
 """Rotas de vouchers: consulta publica, cadastro (admin) e resgate (usuario)."""
 
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_
@@ -33,7 +33,7 @@ def _gerar_codigo_promocional() -> str:
 @public
 def listar_vouchers(db: Session = Depends(get_db)):
     """Lista vouchers ativos e com quantidade disponivel."""
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     return (
         db.query(Voucher)
         .filter(
@@ -87,7 +87,7 @@ def resgatar_voucher(
     if not voucher:
         raise_not_found("Voucher nao encontrado.")
 
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     if voucher.status != "ativo":
         raise_bad_request("Voucher indisponivel para resgate.")
     if voucher.data_inicio is not None and voucher.data_inicio > agora:

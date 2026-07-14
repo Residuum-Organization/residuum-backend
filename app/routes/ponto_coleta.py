@@ -97,9 +97,7 @@ def _serializar_ponto(ponto: PontoColeta, distancia_km: Optional[float] = None) 
         "data_criacao": ponto.data_criacao,
         "data_atualizacao": ponto.data_atualizacao,
         "data_final": ponto.data_final,
-        "horario_funcionamento": ponto.horario_funcionamento,
-        "horarios": ponto.horarios if hasattr(ponto, 'horarios') else [], # <--- ADICIONAR AQUI
-        "status": ponto.status or "ativo",
+        "horarios": ponto.horarios if hasattr(ponto, 'horarios') else [],
     }
 
 
@@ -115,7 +113,7 @@ async def criar_ponto_coleta(
         raise_bad_request("Status inválido. Use: ativo, cheio ou inativo.")
 
     cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
-    _validar_ponto_ativo_com_cooperativa(status, cooperativa.id if cooperativa else None)
+    validar_ponto_ativo_com_cooperativa(status, cooperativa.id if cooperativa else None)
 
     novo_ponto = PontoColeta(
         nome=obj_in.nome,
@@ -268,6 +266,9 @@ async def atualizar_ponto_coleta(
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
     if not ponto:
         raise_not_found("Ponto de coleta não encontrado.")
+    
+    original_coop_id = ponto.cooperativa_id
+    original_status = ponto.status
 
     if obj_in.nome is not None:
         ponto.nome = obj_in.nome
@@ -305,7 +306,8 @@ async def atualizar_ponto_coleta(
         cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
         ponto.cooperativa_id = cooperativa.id if cooperativa else None
 
-    _validar_ponto_ativo_com_cooperativa(ponto.status or "ativo", ponto.cooperativa_id)
+    if ponto.cooperativa_id != original_coop_id or (ponto.status or "ativo") != original_status:
+        validar_ponto_ativo_com_cooperativa(ponto.status or "ativo", ponto.cooperativa_id)
 
     db.commit()
     db.refresh(ponto)

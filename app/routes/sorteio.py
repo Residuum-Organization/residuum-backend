@@ -1,6 +1,6 @@
 """Rotas de sorteios: consulta publica, cadastro (admin) e compra de bilhete."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, or_
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/sorteios", tags=["Sorteios"])
 
 
 def _filtrar_ativos(query):
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     return query.filter(
         Sorteio.status == "ativo",
         or_(Sorteio.data_inicio.is_(None), Sorteio.data_inicio <= agora),
@@ -132,7 +132,7 @@ def comprar_bilhete(
     if not sorteio:
         raise_not_found("Sorteio nao encontrado.")
 
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     if sorteio.status != "ativo":
         raise_bad_request("Sorteio indisponivel para participacao.")
     if sorteio.data_inicio is not None and sorteio.data_inicio > agora:
