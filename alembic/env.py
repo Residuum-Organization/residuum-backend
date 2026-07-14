@@ -33,7 +33,8 @@ import app.models.voucher # noqa: F401, E402
 import app.models.resgate_voucher # noqa: F401, E402
 import app.models.bilhete_sorteio # noqa: F401, E402
 import app.models.campanha # noqa: F401, E402
-
+import app.models.audit_log # noqa: F401, E402
+import app.models.agenda # noqa: F401, E402
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
