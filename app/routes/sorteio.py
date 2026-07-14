@@ -18,6 +18,7 @@ from app.models.usuario import Usuario
 from app.schemas.sorteio import (
     BilheteSorteioResponse,
     SorteioCreate,
+    SorteioUpdate,
     SorteioResponse,
 )
 
@@ -76,6 +77,43 @@ def criar_sorteio(
     db.commit()
     db.refresh(sorteio)
     return sorteio
+
+
+@router.put("/{sorteio_id}", response_model=SorteioResponse)
+def atualizar_sorteio(
+    sorteio_id: int,
+    payload: SorteioUpdate,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Atualiza um sorteio existente."""
+    sorteio = db.query(Sorteio).filter(Sorteio.id == sorteio_id).first()
+    if not sorteio:
+        raise_not_found("Sorteio nao encontrado.")
+
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(sorteio, key, value)
+
+    db.commit()
+    db.refresh(sorteio)
+    return sorteio
+
+
+@router.delete("/{sorteio_id}", status_code=204)
+def deletar_sorteio(
+    sorteio_id: int,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Remove um sorteio."""
+    sorteio = db.query(Sorteio).filter(Sorteio.id == sorteio_id).first()
+    if not sorteio:
+        raise_not_found("Sorteio nao encontrado.")
+
+    db.delete(sorteio)
+    db.commit()
+    return None
 
 
 @router.get("/meus-bilhetes", response_model=list[BilheteSorteioResponse])

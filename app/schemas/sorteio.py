@@ -16,6 +16,16 @@ class SorteioCreate(BaseModel):
     data_fim: Optional[datetime] = None
 
 
+class SorteioUpdate(BaseModel):
+    titulo: Optional[str] = Field(None, min_length=1, max_length=255)
+    descricao: Optional[str] = None
+    premio: Optional[str] = Field(None, min_length=1, max_length=255)
+    custo_pontos: Optional[int] = Field(None, ge=0)
+    status: Optional[str] = Field(None, max_length=30)
+    data_inicio: Optional[datetime] = None
+    data_fim: Optional[datetime] = None
+
+
 class BilheteSorteioResponse(BaseModel):
     id: int
     sorteio_id: int
