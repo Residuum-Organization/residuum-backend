@@ -1,5 +1,12 @@
 import math
+import logging
+from typing import Tuple
 
+try:
+    from geopy.geocoders import Nominatim
+    from geopy.exc import GeocoderTimedOut
+except ImportError:
+    Nominatim = None
 # Este arquivo contém a lógica para verificar a proximidade do usuário ao ponto de coleta.
 
 def calcular_distancia_haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -33,3 +40,22 @@ def validar_localizacao(user_lat: float, user_long: float, ponto_lat: float, pon
     """
     distancia_metros = calcular_distancia_haversine(user_lat, user_long, ponto_lat, ponto_long)
     return distancia_metros <= raio_metros
+
+def obter_coordenadas(endereco: str) -> Tuple[float, float]:
+    """
+    Busca as coordenadas geográficas (latitude e longitude) de um endereço usando Nominatim.
+    Retorna (0.0, 0.0) em caso de falha ou não encontrado.
+    """
+    if not Nominatim:
+        logging.warning("Geopy não está instalado. Não foi possível buscar coordenadas.")
+        return 0.0, 0.0
+
+    try:
+        geolocator = Nominatim(user_agent="residuum_backend_app")
+        location = geolocator.geocode(endereco, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+        return 0.0, 0.0
+    except Exception as e:
+        logging.error(f"Erro ao buscar coordenadas para '{endereco}': {e}")
+        return 0.0, 0.0

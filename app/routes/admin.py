@@ -43,6 +43,7 @@ from app.services.serializacao_service import (
 )
 from app.services.descarte_service import rejeitar_descarte_pendente
 from app.services.transferencia_service import debitar_residuo_do_ponto_coleta
+from app.services.localizacao_service import obter_coordenadas
 
 
 router = APIRouter(
@@ -549,12 +550,20 @@ def aprovar_solicitacao_ponto_coleta(
     if not solicitante:
         raise HTTPException(status_code=404, detail="Usuário solicitante não encontrado")
 
+    latitude = solicitacao.latitude
+    longitude = solicitacao.longitude
+    if (latitude is None or latitude == 0.0) and (longitude is None or longitude == 0.0) and solicitacao.endereco:
+        lat, lon = obter_coordenadas(solicitacao.endereco)
+        if lat != 0.0 and lon != 0.0:
+            latitude = lat
+            longitude = lon
+
     # Cria o ponto de coleta real, vinculado à cooperativa solicitante.
     ponto = PontoColeta(
         nome=solicitacao.nome_ponto,
         endereco=solicitacao.endereco,
-        latitude=solicitacao.latitude,
-        longitude=solicitacao.longitude,
+        latitude=latitude,
+        longitude=longitude,
         capacidade_maxima=solicitacao.capacidade_maxima,
         tipos_residuos_aceitos=solicitacao.tipos_residuos_aceitos or [],
         horario_funcionamento=solicitacao.horario_funcionamento,

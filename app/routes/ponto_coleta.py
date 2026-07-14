@@ -38,7 +38,7 @@ from app.services.ponto_coleta_service import (
     validar_ponto_ativo_com_cooperativa,
     validar_ponto_disponivel_para_descarte,
 )
-from app.services.localizacao_service import calcular_distancia_haversine
+from app.services.localizacao_service import calcular_distancia_haversine, obter_coordenadas
 
 router = APIRouter(tags=["Ponto de Coleta e QR Code"])
 
@@ -115,11 +115,19 @@ async def criar_ponto_coleta(
     cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
     validar_ponto_ativo_com_cooperativa(status, cooperativa.id if cooperativa else None)
 
+    latitude = obj_in.latitude
+    longitude = obj_in.longitude
+    if (latitude == 0.0 and longitude == 0.0) and obj_in.endereco:
+        lat, lon = obter_coordenadas(obj_in.endereco)
+        if lat != 0.0 and lon != 0.0:
+            latitude = lat
+            longitude = lon
+
     novo_ponto = PontoColeta(
         nome=obj_in.nome,
         endereco=obj_in.endereco,
-        latitude=obj_in.latitude,
-        longitude=obj_in.longitude,
+        latitude=latitude,
+        longitude=longitude,
         raio_operacao=obj_in.raio_operacao or 1000.0,
         capacidade_maxima=obj_in.capacidade_maxima,
         tipos_residuos_aceitos=_normalizar_tipos(obj_in.tipos_residuos_aceitos),
@@ -272,12 +280,19 @@ async def atualizar_ponto_coleta(
 
     if obj_in.nome is not None:
         ponto.nome = obj_in.nome
-    if obj_in.endereco is not None:
-        ponto.endereco = obj_in.endereco
     if obj_in.latitude is not None:
         ponto.latitude = obj_in.latitude
     if obj_in.longitude is not None:
         ponto.longitude = obj_in.longitude
+        
+    if obj_in.endereco is not None:
+        ponto.endereco = obj_in.endereco
+        # Se endereço atualizou e não vieram coords explícitas diferentes de 0
+        if (obj_in.latitude is None or obj_in.latitude == 0.0) and (obj_in.longitude is None or obj_in.longitude == 0.0):
+            lat, lon = obter_coordenadas(obj_in.endereco)
+            if lat != 0.0 and lon != 0.0:
+                ponto.latitude = lat
+                ponto.longitude = lon
     if obj_in.raio_operacao is not None:
         ponto.raio_operacao = obj_in.raio_operacao
     if obj_in.capacidade_maxima is not None:
