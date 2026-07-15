@@ -32,11 +32,10 @@ def _normalizar_tipos_residuos(tipos: List[str]) -> List[str]:
 async def criar_solicitacao_ponto_coleta(
     obj_in: SolicitacaoPontoColetaCreate,
     db: Session = Depends(get_db),
-    usuario_atual: Usuario = Depends(get_current_user),
 ):
     """Cria uma solicitacao pendente sem ativar um ponto de coleta."""
     solicitacao = SolicitacaoPontoColeta(
-        usuario_id=usuario_atual.id,
+        usuario_id=None,
         tipo_solicitante=obj_in.tipo_solicitante,
         documento=obj_in.documento,
         responsavel_nome=obj_in.responsavel_nome,

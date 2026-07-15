@@ -22,7 +22,7 @@ class SolicitacaoPontoColeta(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    usuario_id = Column(Integer, ForeignKey("usuario.id"), nullable=False, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuario.id"), nullable=True, index=True)
 
     tipo_solicitante = Column(String(50), nullable=False)
     documento = Column(String(30), nullable=False)
