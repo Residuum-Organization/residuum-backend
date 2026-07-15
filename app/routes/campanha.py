@@ -40,6 +40,15 @@ def listar_campanhas(db: Session = Depends(get_db)):
     )
 
 
+@router.get("/admin", response_model=list[CampanhaResponse])
+def listar_todas_campanhas_admin(
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Lista todas as campanhas, independente do status (restrito a administradores)."""
+    return db.query(Campanha).order_by(Campanha.criado_em.desc()).all()
+
+
 @router.post("", response_model=CampanhaResponse, status_code=201)
 def criar_campanha(
     payload: CampanhaCreate,
