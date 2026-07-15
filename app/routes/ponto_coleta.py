@@ -35,7 +35,6 @@ from app.services.dashboard_ponto_coleta_service import montar_dashboard_ponto_c
 from app.services.ponto_coleta_service import (
     status_ponto_coleta,
     total_inventario_ponto,
-    validar_ponto_ativo_com_cooperativa,
     validar_ponto_disponivel_para_descarte,
 )
 from app.services.localizacao_service import calcular_distancia_haversine, obter_coordenadas
@@ -113,8 +112,6 @@ async def criar_ponto_coleta(
         raise_bad_request("Status inválido. Use: ativo, cheio ou inativo.")
 
     cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
-    validar_ponto_ativo_com_cooperativa(status, cooperativa.id if cooperativa else None)
-
     latitude = obj_in.latitude
     longitude = obj_in.longitude
     if (latitude == 0.0 and longitude == 0.0) and obj_in.endereco:
@@ -170,8 +167,6 @@ async def obter_ponto_coleta(
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
     if not ponto:
         raise_not_found("Ponto de coleta não encontrado.")
-    if usuario_atual.role != "admin" and ponto.cooperativa_id is None:
-        raise_conflict("Ponto de coleta indisponível para descarte até a designação de uma cooperativa responsável.")
     if usuario_atual.role == "cooperativa":
         validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
     return _serializar_ponto(ponto)
@@ -204,8 +199,6 @@ async def listar_pontos_coleta(
 
     if usuario_atual.role == "cooperativa":
         query = query.filter(PontoColeta.cooperativa_id == usuario_atual.id)
-    elif usuario_atual.role != "admin":
-        query = query.filter(PontoColeta.cooperativa_id.is_not(None))
 
     if not incluir_inativos:
         query = query.filter(PontoColeta.ativo == 1)
@@ -274,9 +267,6 @@ async def atualizar_ponto_coleta(
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
     validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
     
-    original_coop_id = ponto.cooperativa_id
-    original_status = ponto.status
-
     if obj_in.nome is not None:
         ponto.nome = obj_in.nome
     if obj_in.latitude is not None:
@@ -321,9 +311,6 @@ async def atualizar_ponto_coleta(
             raise HTTPException(status_code=403, detail="Somente o administrador pode trocar o responsavel pelo ponto.")
         cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
         ponto.cooperativa_id = cooperativa.id if cooperativa else None
-
-    if ponto.cooperativa_id != original_coop_id or (ponto.status or "ativo") != original_status:
-        validar_ponto_ativo_com_cooperativa(ponto.status or "ativo", ponto.cooperativa_id)
 
     db.commit()
     db.refresh(ponto)
