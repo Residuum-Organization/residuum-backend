@@ -48,6 +48,15 @@ def listar_vouchers(db: Session = Depends(get_db)):
     )
 
 
+@router.get("/admin", response_model=list[VoucherResponse])
+def listar_todos_vouchers_admin(
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Lista vouchers de qualquer status e estoque para gestao administrativa."""
+    return db.query(Voucher).order_by(Voucher.criado_em.desc()).all()
+
+
 @router.post("", response_model=VoucherResponse, status_code=201)
 def criar_voucher(
     payload: VoucherCreate,
