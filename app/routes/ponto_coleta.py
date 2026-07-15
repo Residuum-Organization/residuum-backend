@@ -268,12 +268,11 @@ async def atualizar_ponto_coleta(
     ponto_id: int,
     obj_in: PontoColetaUpdate,
     db: Session = Depends(get_db),
-    _: Usuario = Depends(require_role("admin"))
+    usuario_atual: Usuario = Depends(require_role("admin", "cooperativa"))
 ):
-    """Atualiza um ponto de coleta (apenas admin)."""
+    """Atualiza um ponto pelo admin ou pela cooperativa responsavel."""
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
-    if not ponto:
-        raise_not_found("Ponto de coleta não encontrado.")
+    validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
     
     original_coop_id = ponto.cooperativa_id
     original_status = ponto.status
@@ -318,6 +317,8 @@ async def atualizar_ponto_coleta(
         ponto.data_final = obj_in.data_final
 
     if "cooperativa_id" in obj_in.model_fields_set:
+        if usuario_atual.role != "admin":
+            raise HTTPException(status_code=403, detail="Somente o administrador pode trocar o responsavel pelo ponto.")
         cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
         ponto.cooperativa_id = cooperativa.id if cooperativa else None
 
@@ -333,17 +334,14 @@ async def atualizar_horarios_ponto(
     ponto_id: int,
     horarios_in: List[HorarioCreate],
     db: Session = Depends(get_db),
-    # Atualmente a gestão de pontos é feita pelo admin no seu sistema. 
-    # Se o "dono" for uma cooperativa, você pode usar Depends(require_role("admin", "cooperativa"))
-    usuario_atual: Usuario = Depends(require_role("admin")) 
+    usuario_atual: Usuario = Depends(require_role("admin", "cooperativa"))
 ):
     """
     RF020: Atualiza a grade de horários de funcionamento de um ponto de coleta.
     Recebe uma lista completa de horários e substitui os antigos.
     """
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
-    if not ponto:
-        raise HTTPException(status_code=404, detail="Ponto de coleta não encontrado.")
+    validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
 
     # 1. Remove os horários antigos (substituição completa da grade)
     db.query(HorarioDisponibilidade).filter(HorarioDisponibilidade.ponto_coleta_id == ponto_id).delete()
@@ -459,4 +457,3 @@ async def validar_qrcode_token(
         "ponto_nome": ponto.nome if ponto else "Desconhecido",
         "token": token.token
     }
-
