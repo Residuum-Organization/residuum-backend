@@ -50,6 +50,7 @@ class SorteioResponse(BaseModel):
     data_fim: datetime | None = None
     criado_em: datetime
     atualizado_em: datetime
+    total_bilhetes: int = 0
 
     class Config:
         from_attributes = True

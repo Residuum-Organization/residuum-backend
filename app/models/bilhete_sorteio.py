@@ -36,5 +36,5 @@ class BilheteSorteio(Base):
 
     criado_em = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    sorteio = relationship("Sorteio")
+    sorteio = relationship("Sorteio", back_populates="bilhetes")
     usuario = relationship("Usuario")

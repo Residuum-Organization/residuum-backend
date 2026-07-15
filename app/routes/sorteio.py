@@ -1,5 +1,6 @@
-"""Rotas de sorteios: consulta publica, cadastro (admin) e compra de bilhete."""
+"""Rotas de sorteios: consulta publica, cadastro, bilhetes e apuracao."""
 
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
@@ -11,6 +12,7 @@ from app.core.exceptions import raise_bad_request, raise_not_found
 from app.database import get_db
 from app.dependencies.auth import get_current_user, require_role
 from app.models.bilhete_sorteio import BilheteSorteio
+from app.models.audit_log import AuditLog
 from app.models.descarte import Descarte
 from app.models.resgate_pontuacao import ResgatePontuacao
 from app.models.sorteio import Sorteio
@@ -21,6 +23,7 @@ from app.schemas.sorteio import (
     SorteioUpdate,
     SorteioResponse,
 )
+from app.services.audit_service import registrar_acao
 
 router = APIRouter(prefix="/sorteios", tags=["Sorteios"])
 
@@ -44,9 +47,24 @@ def _usuario_validou_descarte_por_gps(usuario_id: int, db: Session) -> bool:
             Descarte.status == "confirmado",
             Descarte.usuario_lat.isnot(None),
             Descarte.usuario_long.isnot(None),
+            Descarte.usuario_lat != 0,
+            Descarte.usuario_long != 0,
         )
         .first()
         is not None
+    )
+
+
+def _obter_resultado(sorteio_id: int, db: Session):
+    return (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.action == "sorteio.apurar",
+            AuditLog.target_type == "sorteio",
+            AuditLog.target_id == sorteio_id,
+        )
+        .order_by(AuditLog.created_at.desc())
+        .first()
     )
 
 
@@ -55,6 +73,71 @@ def _usuario_validou_descarte_por_gps(usuario_id: int, db: Session) -> bool:
 def listar_sorteios(db: Session = Depends(get_db)):
     """Lista sorteios ativos por padrao."""
     return _filtrar_ativos(db.query(Sorteio)).order_by(Sorteio.criado_em.desc()).all()
+
+
+@router.get("/admin", response_model=list[SorteioResponse])
+def listar_todos_sorteios_admin(
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Lista sorteios de qualquer status para gestao administrativa."""
+    return db.query(Sorteio).order_by(Sorteio.criado_em.desc()).all()
+
+
+@router.get("/{sorteio_id}/resultado")
+@public
+def obter_resultado_sorteio(sorteio_id: int, db: Session = Depends(get_db)):
+    sorteio = db.query(Sorteio).filter(Sorteio.id == sorteio_id).first()
+    if not sorteio:
+        raise_not_found("Sorteio nao encontrado.")
+    resultado = _obter_resultado(sorteio_id, db)
+    if not resultado:
+        raise_not_found("Resultado ainda nao publicado.")
+    return {**(resultado.payload or {}), "sorteado_em": resultado.created_at}
+
+
+@router.post("/{sorteio_id}/sortear")
+def sortear_vencedor(
+    sorteio_id: int,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    sorteio = db.query(Sorteio).filter(Sorteio.id == sorteio_id).with_for_update().first()
+    if not sorteio:
+        raise_not_found("Sorteio nao encontrado.")
+    if _obter_resultado(sorteio_id, db):
+        raise_bad_request("Este sorteio ja possui um vencedor publicado.")
+
+    agora = datetime.now(timezone.utc)
+    if sorteio.status != "encerrado" and (sorteio.data_fim is None or sorteio.data_fim > agora):
+        raise_bad_request("Encerre o sorteio ou aguarde a data final antes da apuracao.")
+
+    bilhetes = db.query(BilheteSorteio).filter(BilheteSorteio.sorteio_id == sorteio.id).all()
+    if not bilhetes:
+        raise_bad_request("Nao existem bilhetes para apurar este sorteio.")
+
+    vencedor = secrets.choice(bilhetes)
+    payload = {
+        "sorteio_id": sorteio.id,
+        "titulo": sorteio.titulo,
+        "premio": sorteio.premio,
+        "bilhete_id": vencedor.id,
+        "numero": vencedor.numero,
+        "usuario_id": vencedor.usuario_id,
+        "vencedor_nome": vencedor.usuario.nome if vencedor.usuario else None,
+    }
+    sorteio.status = "encerrado"
+    registro = registrar_acao(
+        db,
+        admin_id=admin.id,
+        action="sorteio.apurar",
+        target_type="sorteio",
+        target_id=sorteio.id,
+        payload=payload,
+    )
+    db.commit()
+    db.refresh(registro)
+    return {**payload, "sorteado_em": registro.created_at}
 
 
 @router.post("", response_model=SorteioResponse, status_code=201)
