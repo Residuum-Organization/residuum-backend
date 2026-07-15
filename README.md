@@ -15,7 +15,7 @@ A lógica central do sistema segue as regras de negócio do projeto:
 
 ---
 
-## Tecnologias
+## Tecnologias 
 
 | Tecnologia | Uso no projeto |
 |---|---|
