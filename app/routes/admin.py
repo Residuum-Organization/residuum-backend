@@ -256,10 +256,19 @@ def remover_usuario(
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
-    if usuario.role == "cooperativa":
-        possui_pontos_vinculados = db.query(PontoColeta.id).filter(PontoColeta.cooperativa_id == usuario.id).first()
-        if possui_pontos_vinculados:
-            raise_bad_request("Reatribua os pontos de coleta desta cooperativa antes de remover o usuário.")
+    # Desvincular de pontos de coleta
+    db.query(PontoColeta).filter(PontoColeta.cooperativa_id == usuario.id).update({"cooperativa_id": None})
+
+    # Remover descartes pendentes e desvincular descartes do historico
+    db.query(Descarte).filter(Descarte.usuario_id == usuario.id, Descarte.status == 'pendente').delete()
+    db.query(Descarte).filter(Descarte.usuario_id == usuario.id).update({"usuario_id": None})
+
+    # Desvincular solicitacoes de ponto
+    db.query(SolicitacaoPontoColeta).filter(SolicitacaoPontoColeta.usuario_id == usuario.id).update({"usuario_id": None})
+    db.query(SolicitacaoPontoColeta).filter(SolicitacaoPontoColeta.revisado_por_id == usuario.id).update({"revisado_por_id": None})
+
+    # Remover pontuacoes associadas
+    db.query(Pontuacao).filter(Pontuacao.usuario_id == usuario.id).delete()
 
     registrar_acao(
         db,

@@ -52,7 +52,7 @@ class PontoColeta(Base):
     tipos_residuos_aceitos = Column(JSON, default=list)  # ex.: ["plastico", "papel"]
     horario_funcionamento = Column(String(255), nullable=True)
     status = Column(String(20), default="ativo")  # ativo, cheio, inativo
-    cooperativa_id = Column(Integer, ForeignKey("usuario.id"), nullable=True, index=True)
+    cooperativa_id = Column(Integer, ForeignKey("usuario.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Inventário de resíduos (tipo_residuo -> quantidade)
     inventario = Column(JSON, default=dict)
