@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.core.decorators import public
 from app.dependencies.auth import get_current_user
 from app.models.solicitacao_ponto_coleta import SolicitacaoPontoColeta
 from app.models.usuario import Usuario
@@ -30,14 +29,14 @@ def _normalizar_tipos_residuos(tipos: List[str]) -> List[str]:
     response_model=SolicitacaoPontoColetaResponse,
     tags=["Solicitacoes de Ponto de Coleta"],
 )
-@public
 async def criar_solicitacao_ponto_coleta(
     obj_in: SolicitacaoPontoColetaCreate,
     db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
 ):
     """Cria uma solicitacao pendente sem ativar um ponto de coleta."""
     solicitacao = SolicitacaoPontoColeta(
-        usuario_id=None,
+        usuario_id=usuario_atual.id,
         tipo_solicitante=obj_in.tipo_solicitante,
         documento=obj_in.documento,
         responsavel_nome=obj_in.responsavel_nome,
