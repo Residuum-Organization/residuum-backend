@@ -29,6 +29,7 @@ class SolicitacaoPontoColetaCreate(BaseModel):
         max_length=30,
     )
     email: str = Field(..., min_length=1, max_length=255)
+    senha: str = Field(..., min_length=6, max_length=72)
     nome_ponto: str = Field(..., min_length=1, max_length=255)
     endereco: str = Field(..., min_length=1, max_length=500)
     latitude: float

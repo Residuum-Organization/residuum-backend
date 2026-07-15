@@ -7,7 +7,6 @@ Usa hashing de senha com bcrypt e JWT para tokens.
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
 
 from app.database import get_db
 from app.models.usuario import Usuario
@@ -30,28 +29,10 @@ from app.services.serializacao_service import (
     serializar_descarte,
 )
 from app.services.extrato_pontos_service import montar_extrato_pontos_usuario
+from app.services.password_service import hash_senha, verificar_senha
 
 # Roteador para agrupar as rotas de autenticação
 router = APIRouter(tags=["Autenticação"])
-
-# Contexto para hashing de senhas usando bcrypt
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-def hash_senha(senha: str):
-    """
-    Gera um hash seguro para a senha usando bcrypt.
-    Limita a senha a 72 caracteres para compatibilidade.
-    """
-    return pwd_context.hash(senha[:72])
-
-
-def verificar_senha(senha: str, hash: str):
-    """
-    Verifica se a senha corresponde ao hash armazenado.
-    """
-    return pwd_context.verify(senha[:72], hash)
-
 
 # ========================
 # CADASTRO DE USUÁRIO

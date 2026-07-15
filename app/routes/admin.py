@@ -553,11 +553,37 @@ def aprovar_solicitacao_ponto_coleta(
             f"Apenas solicitações pendentes podem ser aprovadas (status atual: {solicitacao.status})."
         )
 
-    solicitante = (
-        db.query(Usuario).filter(Usuario.id == solicitacao.usuario_id).first()
-    )
-    if not solicitante:
-        raise HTTPException(status_code=404, detail="Usuário solicitante não encontrado")
+    role_anterior = None
+    if solicitacao.usuario_id is not None:
+        # Keep compatibility with older requests that were linked to an account.
+        solicitante = db.query(Usuario).filter(Usuario.id == solicitacao.usuario_id).first()
+        if not solicitante:
+            raise HTTPException(status_code=404, detail="Usuário solicitante não encontrado")
+        role_anterior = solicitante.role
+        if solicitante.role != "admin":
+            solicitante.role = "cooperativa"
+    else:
+        if db.query(Usuario.id).filter(Usuario.email == solicitacao.email).first():
+            raise_bad_request(
+                "O e-mail da solicitação foi cadastrado depois do envio. "
+                "Revise a conta antes de aprovar."
+            )
+        if not solicitacao.senha_hash:
+            raise_bad_request(
+                "A solicitação não possui credencial para criar a conta da cooperativa."
+            )
+
+        solicitante = Usuario(
+            nome=solicitacao.responsavel_nome,
+            email=solicitacao.email,
+            telefone=solicitacao.responsavel_telefone,
+            senha_hash=solicitacao.senha_hash,
+            role="cooperativa",
+            pontuacao_total=0,
+        )
+        db.add(solicitante)
+        db.flush()
+        solicitacao.usuario_id = solicitante.id
 
     latitude = solicitacao.latitude
     longitude = solicitacao.longitude
@@ -588,13 +614,9 @@ def aprovar_solicitacao_ponto_coleta(
     solicitacao.ponto_coleta_id = ponto.id
     solicitacao.revisado_por_id = admin.id
     solicitacao.revisado_em = datetime.utcnow()
+    solicitacao.senha_hash = None
     if payload.observacao is not None:
         solicitacao.observacao_admin = payload.observacao
-
-    # Promove o solicitante a cooperativa (não rebaixa admin).
-    role_anterior = solicitante.role
-    if solicitante.role != "admin":
-        solicitante.role = "cooperativa"
 
     registrar_acao(
         db,
@@ -638,6 +660,7 @@ def rejeitar_solicitacao_ponto_coleta(
     solicitacao.motivo_rejeicao = payload.motivo
     solicitacao.revisado_por_id = admin.id
     solicitacao.revisado_em = datetime.utcnow()
+    solicitacao.senha_hash = None
 
     registrar_acao(
         db,
