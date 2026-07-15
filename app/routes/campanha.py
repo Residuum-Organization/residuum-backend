@@ -15,6 +15,7 @@ from app.models.pontuacao import Pontuacao
 from app.models.usuario import Usuario
 from app.schemas.campanha import (
     CampanhaCreate,
+    CampanhaUpdate,
     CampanhaResponse,
     InscricaoCampanhaResponse,
 )
@@ -39,6 +40,15 @@ def listar_campanhas(db: Session = Depends(get_db)):
     )
 
 
+@router.get("/admin", response_model=list[CampanhaResponse])
+def listar_todas_campanhas_admin(
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Lista todas as campanhas, independente do status (restrito a administradores)."""
+    return db.query(Campanha).order_by(Campanha.criado_em.desc()).all()
+
+
 @router.post("", response_model=CampanhaResponse, status_code=201)
 def criar_campanha(
     payload: CampanhaCreate,
@@ -60,6 +70,43 @@ def criar_campanha(
     db.commit()
     db.refresh(campanha)
     return campanha
+
+
+@router.put("/{campanha_id}", response_model=CampanhaResponse)
+def atualizar_campanha(
+    campanha_id: int,
+    payload: CampanhaUpdate,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Atualiza uma campanha existente."""
+    campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
+    if not campanha:
+        raise_not_found("Campanha não encontrada.")
+
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(campanha, key, value)
+
+    db.commit()
+    db.refresh(campanha)
+    return campanha
+
+
+@router.delete("/{campanha_id}", status_code=204)
+def deletar_campanha(
+    campanha_id: int,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Remove uma campanha (ou encerra logicamente se for uma escolha de arquitetura, mas aqui faremos delete)."""
+    campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
+    if not campanha:
+        raise_not_found("Campanha não encontrada.")
+
+    db.delete(campanha)
+    db.commit()
+    return None
 
 
 @router.get("/minhas-inscricoes", response_model=list[InscricaoCampanhaResponse])

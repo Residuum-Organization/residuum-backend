@@ -1,7 +1,7 @@
 """Rotas de vouchers: consulta publica, cadastro (admin) e resgate (usuario)."""
 
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_
@@ -18,6 +18,7 @@ from app.models.voucher import Voucher
 from app.schemas.voucher import (
     ResgateVoucherResponse,
     VoucherCreate,
+    VoucherUpdate,
     VoucherResponse,
 )
 
@@ -33,7 +34,7 @@ def _gerar_codigo_promocional() -> str:
 @public
 def listar_vouchers(db: Session = Depends(get_db)):
     """Lista vouchers ativos e com quantidade disponivel."""
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     return (
         db.query(Voucher)
         .filter(
@@ -45,6 +46,15 @@ def listar_vouchers(db: Session = Depends(get_db)):
         .order_by(Voucher.criado_em.desc())
         .all()
     )
+
+
+@router.get("/admin", response_model=list[VoucherResponse])
+def listar_todos_vouchers_admin(
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Lista vouchers de qualquer status e estoque para gestao administrativa."""
+    return db.query(Voucher).order_by(Voucher.criado_em.desc()).all()
 
 
 @router.post("", response_model=VoucherResponse, status_code=201)
@@ -70,6 +80,43 @@ def criar_voucher(
     return voucher
 
 
+@router.put("/{voucher_id}", response_model=VoucherResponse)
+def atualizar_voucher(
+    voucher_id: int,
+    payload: VoucherUpdate,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Atualiza um voucher existente."""
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+    if not voucher:
+        raise_not_found("Voucher nao encontrado.")
+
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(voucher, key, value)
+
+    db.commit()
+    db.refresh(voucher)
+    return voucher
+
+
+@router.delete("/{voucher_id}", status_code=204)
+def deletar_voucher(
+    voucher_id: int,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Remove um voucher."""
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+    if not voucher:
+        raise_not_found("Voucher nao encontrado.")
+
+    db.delete(voucher)
+    db.commit()
+    return None
+
+
 @router.post("/{voucher_id}/resgatar", response_model=ResgateVoucherResponse, status_code=201)
 def resgatar_voucher(
     voucher_id: int,
@@ -87,7 +134,7 @@ def resgatar_voucher(
     if not voucher:
         raise_not_found("Voucher nao encontrado.")
 
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     if voucher.status != "ativo":
         raise_bad_request("Voucher indisponivel para resgate.")
     if voucher.data_inicio is not None and voucher.data_inicio > agora:

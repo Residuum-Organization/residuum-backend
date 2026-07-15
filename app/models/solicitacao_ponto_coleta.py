@@ -1,8 +1,8 @@
 """
 Modelo de solicitacao de ponto de coleta.
 
-Armazena pedidos feitos por usuarios autenticados para cadastro futuro de
-pontos de coleta, sem ativar o ponto diretamente.
+Armazena pedidos publicos para cadastro futuro de pontos de coleta, sem criar
+uma conta ou ativar o ponto antes da aprovacao administrativa.
 """
 
 from sqlalchemy import JSON, CheckConstraint, Column, DateTime, Float, ForeignKey, Integer, String
@@ -22,13 +22,14 @@ class SolicitacaoPontoColeta(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    usuario_id = Column(Integer, ForeignKey("usuario.id"), nullable=False, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuario.id"), nullable=True, index=True)
 
     tipo_solicitante = Column(String(50), nullable=False)
     documento = Column(String(30), nullable=False)
     responsavel_nome = Column(String(255), nullable=False)
     responsavel_telefone = Column(String(30), nullable=False)
     email = Column(String(255), nullable=False)
+    senha_hash = Column(String(255), nullable=True)
 
     nome_ponto = Column(String(255), nullable=False)
     endereco = Column(String(500), nullable=False)

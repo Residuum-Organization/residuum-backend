@@ -17,6 +17,17 @@ class CampanhaCreate(BaseModel):
     data_fim: Optional[datetime] = None
 
 
+class CampanhaUpdate(BaseModel):
+    titulo: Optional[str] = Field(None, min_length=1, max_length=255)
+    descricao: Optional[str] = None
+    patrocinador: Optional[str] = Field(None, min_length=1, max_length=255)
+    patrocinador_logo_url: Optional[str] = Field(default=None, max_length=500)
+    pontos_recompensa: Optional[int] = Field(None, ge=0)
+    status: Optional[str] = Field(None, max_length=30)
+    data_inicio: Optional[datetime] = None
+    data_fim: Optional[datetime] = None
+
+
 class CampanhaResponse(BaseModel):
     id: int
     titulo: str

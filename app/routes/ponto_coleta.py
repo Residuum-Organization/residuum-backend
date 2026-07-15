@@ -35,10 +35,9 @@ from app.services.dashboard_ponto_coleta_service import montar_dashboard_ponto_c
 from app.services.ponto_coleta_service import (
     status_ponto_coleta,
     total_inventario_ponto,
-    validar_ponto_ativo_com_cooperativa,
     validar_ponto_disponivel_para_descarte,
 )
-from app.services.localizacao_service import calcular_distancia_haversine
+from app.services.localizacao_service import calcular_distancia_haversine, obter_coordenadas
 
 router = APIRouter(tags=["Ponto de Coleta e QR Code"])
 
@@ -97,9 +96,7 @@ def _serializar_ponto(ponto: PontoColeta, distancia_km: Optional[float] = None) 
         "data_criacao": ponto.data_criacao,
         "data_atualizacao": ponto.data_atualizacao,
         "data_final": ponto.data_final,
-        "horario_funcionamento": ponto.horario_funcionamento,
-        "horarios": ponto.horarios if hasattr(ponto, 'horarios') else [], # <--- ADICIONAR AQUI
-        "status": ponto.status or "ativo",
+        "horarios": ponto.horarios if hasattr(ponto, 'horarios') else [],
     }
 
 
@@ -115,13 +112,19 @@ async def criar_ponto_coleta(
         raise_bad_request("Status inválido. Use: ativo, cheio ou inativo.")
 
     cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
-    _validar_ponto_ativo_com_cooperativa(status, cooperativa.id if cooperativa else None)
+    latitude = obj_in.latitude
+    longitude = obj_in.longitude
+    if (latitude == 0.0 and longitude == 0.0) and obj_in.endereco:
+        lat, lon = obter_coordenadas(obj_in.endereco)
+        if lat != 0.0 and lon != 0.0:
+            latitude = lat
+            longitude = lon
 
     novo_ponto = PontoColeta(
         nome=obj_in.nome,
         endereco=obj_in.endereco,
-        latitude=obj_in.latitude,
-        longitude=obj_in.longitude,
+        latitude=latitude,
+        longitude=longitude,
         raio_operacao=obj_in.raio_operacao or 1000.0,
         capacidade_maxima=obj_in.capacidade_maxima,
         tipos_residuos_aceitos=_normalizar_tipos(obj_in.tipos_residuos_aceitos),
@@ -164,8 +167,6 @@ async def obter_ponto_coleta(
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
     if not ponto:
         raise_not_found("Ponto de coleta não encontrado.")
-    if usuario_atual.role != "admin" and ponto.cooperativa_id is None:
-        raise_conflict("Ponto de coleta indisponível para descarte até a designação de uma cooperativa responsável.")
     if usuario_atual.role == "cooperativa":
         validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
     return _serializar_ponto(ponto)
@@ -198,8 +199,6 @@ async def listar_pontos_coleta(
 
     if usuario_atual.role == "cooperativa":
         query = query.filter(PontoColeta.cooperativa_id == usuario_atual.id)
-    elif usuario_atual.role != "admin":
-        query = query.filter(PontoColeta.cooperativa_id.is_not(None))
 
     if not incluir_inativos:
         query = query.filter(PontoColeta.ativo == 1)
@@ -262,21 +261,27 @@ async def atualizar_ponto_coleta(
     ponto_id: int,
     obj_in: PontoColetaUpdate,
     db: Session = Depends(get_db),
-    _: Usuario = Depends(require_role("admin"))
+    usuario_atual: Usuario = Depends(require_role("admin", "cooperativa"))
 ):
-    """Atualiza um ponto de coleta (apenas admin)."""
+    """Atualiza um ponto pelo admin ou pela cooperativa responsavel."""
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
-    if not ponto:
-        raise_not_found("Ponto de coleta não encontrado.")
-
+    validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
+    
     if obj_in.nome is not None:
         ponto.nome = obj_in.nome
-    if obj_in.endereco is not None:
-        ponto.endereco = obj_in.endereco
     if obj_in.latitude is not None:
         ponto.latitude = obj_in.latitude
     if obj_in.longitude is not None:
         ponto.longitude = obj_in.longitude
+        
+    if obj_in.endereco is not None:
+        ponto.endereco = obj_in.endereco
+        # Se endereço atualizou e não vieram coords explícitas diferentes de 0
+        if (obj_in.latitude is None or obj_in.latitude == 0.0) and (obj_in.longitude is None or obj_in.longitude == 0.0):
+            lat, lon = obter_coordenadas(obj_in.endereco)
+            if lat != 0.0 and lon != 0.0:
+                ponto.latitude = lat
+                ponto.longitude = lon
     if obj_in.raio_operacao is not None:
         ponto.raio_operacao = obj_in.raio_operacao
     if obj_in.capacidade_maxima is not None:
@@ -302,10 +307,10 @@ async def atualizar_ponto_coleta(
         ponto.data_final = obj_in.data_final
 
     if "cooperativa_id" in obj_in.model_fields_set:
+        if usuario_atual.role != "admin":
+            raise HTTPException(status_code=403, detail="Somente o administrador pode trocar o responsavel pelo ponto.")
         cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
         ponto.cooperativa_id = cooperativa.id if cooperativa else None
-
-    _validar_ponto_ativo_com_cooperativa(ponto.status or "ativo", ponto.cooperativa_id)
 
     db.commit()
     db.refresh(ponto)
@@ -316,17 +321,14 @@ async def atualizar_horarios_ponto(
     ponto_id: int,
     horarios_in: List[HorarioCreate],
     db: Session = Depends(get_db),
-    # Atualmente a gestão de pontos é feita pelo admin no seu sistema. 
-    # Se o "dono" for uma cooperativa, você pode usar Depends(require_role("admin", "cooperativa"))
-    usuario_atual: Usuario = Depends(require_role("admin")) 
+    usuario_atual: Usuario = Depends(require_role("admin", "cooperativa"))
 ):
     """
     RF020: Atualiza a grade de horários de funcionamento de um ponto de coleta.
     Recebe uma lista completa de horários e substitui os antigos.
     """
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
-    if not ponto:
-        raise HTTPException(status_code=404, detail="Ponto de coleta não encontrado.")
+    validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
 
     # 1. Remove os horários antigos (substituição completa da grade)
     db.query(HorarioDisponibilidade).filter(HorarioDisponibilidade.ponto_coleta_id == ponto_id).delete()
@@ -442,4 +444,3 @@ async def validar_qrcode_token(
         "ponto_nome": ponto.nome if ponto else "Desconhecido",
         "token": token.token
     }
-

@@ -2,10 +2,7 @@
 
 from datetime import datetime
 
-from app.core.exceptions import (
-    raise_bad_request,
-    raise_conflict,
-)
+from app.core.exceptions import raise_conflict
 from app.models.ponto_coleta import PontoColeta
 
 
@@ -38,17 +35,8 @@ def status_ponto_coleta(ponto: PontoColeta) -> str:
     return ponto.status or "ativo"
 
 
-def validar_ponto_ativo_com_cooperativa(status_ponto: str, cooperativa_id: int | None) -> None:
-    """Impede ponto ativo/cheio sem cooperativa responsável."""
-    if status_ponto in {"ativo", "cheio"} and cooperativa_id is None:
-        raise_bad_request("Pontos ativos precisam ter uma cooperativa responsável designada.")
-
-
 def validar_ponto_disponivel_para_descarte(ponto: PontoColeta) -> None:
-    """Bloqueia descarte em ponto sem cooperativa ou fora de operação."""
-    if ponto.cooperativa_id is None:
-        raise_conflict("Ponto de coleta indisponível para descarte até a designação de uma cooperativa responsável.")
-
+    """Bloqueia descarte em ponto fora de operação."""
     status_atual = status_ponto_coleta(ponto)
     if status_atual == "inativo":
         if ponto.data_final and ponto.data_final.replace(tzinfo=None) < datetime.utcnow():

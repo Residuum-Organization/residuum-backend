@@ -43,6 +43,7 @@ from app.services.serializacao_service import (
 )
 from app.services.descarte_service import rejeitar_descarte_pendente
 from app.services.transferencia_service import debitar_residuo_do_ponto_coleta
+from app.services.localizacao_service import obter_coordenadas
 
 
 router = APIRouter(
@@ -255,10 +256,19 @@ def remover_usuario(
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
-    if usuario.role == "cooperativa":
-        possui_pontos_vinculados = db.query(PontoColeta.id).filter(PontoColeta.cooperativa_id == usuario.id).first()
-        if possui_pontos_vinculados:
-            raise_bad_request("Reatribua os pontos de coleta desta cooperativa antes de remover o usuário.")
+    # Desvincular de pontos de coleta
+    db.query(PontoColeta).filter(PontoColeta.cooperativa_id == usuario.id).update({"cooperativa_id": None})
+
+    # Remover descartes pendentes e desvincular descartes do historico
+    db.query(Descarte).filter(Descarte.usuario_id == usuario.id, Descarte.status == 'pendente').delete()
+    db.query(Descarte).filter(Descarte.usuario_id == usuario.id).update({"usuario_id": None})
+
+    # Desvincular solicitacoes de ponto
+    db.query(SolicitacaoPontoColeta).filter(SolicitacaoPontoColeta.usuario_id == usuario.id).update({"usuario_id": None})
+    db.query(SolicitacaoPontoColeta).filter(SolicitacaoPontoColeta.revisado_por_id == usuario.id).update({"revisado_por_id": None})
+
+    # Remover pontuacoes associadas
+    db.query(Pontuacao).filter(Pontuacao.usuario_id == usuario.id).delete()
 
     registrar_acao(
         db,
@@ -543,18 +553,52 @@ def aprovar_solicitacao_ponto_coleta(
             f"Apenas solicitações pendentes podem ser aprovadas (status atual: {solicitacao.status})."
         )
 
-    solicitante = (
-        db.query(Usuario).filter(Usuario.id == solicitacao.usuario_id).first()
-    )
-    if not solicitante:
-        raise HTTPException(status_code=404, detail="Usuário solicitante não encontrado")
+    role_anterior = None
+    if solicitacao.usuario_id is not None:
+        # Keep compatibility with older requests that were linked to an account.
+        solicitante = db.query(Usuario).filter(Usuario.id == solicitacao.usuario_id).first()
+        if not solicitante:
+            raise HTTPException(status_code=404, detail="Usuário solicitante não encontrado")
+        role_anterior = solicitante.role
+        if solicitante.role != "admin":
+            solicitante.role = "cooperativa"
+    else:
+        if db.query(Usuario.id).filter(Usuario.email == solicitacao.email).first():
+            raise_bad_request(
+                "O e-mail da solicitação foi cadastrado depois do envio. "
+                "Revise a conta antes de aprovar."
+            )
+        if not solicitacao.senha_hash:
+            raise_bad_request(
+                "A solicitação não possui credencial para criar a conta da cooperativa."
+            )
+
+        solicitante = Usuario(
+            nome=solicitacao.responsavel_nome,
+            email=solicitacao.email,
+            telefone=solicitacao.responsavel_telefone,
+            senha_hash=solicitacao.senha_hash,
+            role="cooperativa",
+            pontuacao_total=0,
+        )
+        db.add(solicitante)
+        db.flush()
+        solicitacao.usuario_id = solicitante.id
+
+    latitude = solicitacao.latitude
+    longitude = solicitacao.longitude
+    if (latitude is None or latitude == 0.0) and (longitude is None or longitude == 0.0) and solicitacao.endereco:
+        lat, lon = obter_coordenadas(solicitacao.endereco)
+        if lat != 0.0 and lon != 0.0:
+            latitude = lat
+            longitude = lon
 
     # Cria o ponto de coleta real, vinculado à cooperativa solicitante.
     ponto = PontoColeta(
         nome=solicitacao.nome_ponto,
         endereco=solicitacao.endereco,
-        latitude=solicitacao.latitude,
-        longitude=solicitacao.longitude,
+        latitude=latitude,
+        longitude=longitude,
         capacidade_maxima=solicitacao.capacidade_maxima,
         tipos_residuos_aceitos=solicitacao.tipos_residuos_aceitos or [],
         horario_funcionamento=solicitacao.horario_funcionamento,
@@ -570,13 +614,9 @@ def aprovar_solicitacao_ponto_coleta(
     solicitacao.ponto_coleta_id = ponto.id
     solicitacao.revisado_por_id = admin.id
     solicitacao.revisado_em = datetime.utcnow()
+    solicitacao.senha_hash = None
     if payload.observacao is not None:
         solicitacao.observacao_admin = payload.observacao
-
-    # Promove o solicitante a cooperativa (não rebaixa admin).
-    role_anterior = solicitante.role
-    if solicitante.role != "admin":
-        solicitante.role = "cooperativa"
 
     registrar_acao(
         db,
@@ -620,6 +660,7 @@ def rejeitar_solicitacao_ponto_coleta(
     solicitacao.motivo_rejeicao = payload.motivo
     solicitacao.revisado_por_id = admin.id
     solicitacao.revisado_em = datetime.utcnow()
+    solicitacao.senha_hash = None
 
     registrar_acao(
         db,

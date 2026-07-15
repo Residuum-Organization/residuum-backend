@@ -25,7 +25,7 @@ def listar_notificacoes_nao_lidas(
         ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
         validar_acesso_operacional_ao_ponto(usuario, ponto)
 
-    query = db.query(Notificacao).filter(Notificacao.lida == False)
+    query = db.query(Notificacao).filter(Notificacao.lida.is_(False))
     if usuario.role == "cooperativa":
         query = query.join(PontoColeta, Notificacao.ponto_coleta_id == PontoColeta.id).filter(
             PontoColeta.cooperativa_id == usuario.id

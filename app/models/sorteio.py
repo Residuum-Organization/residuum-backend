@@ -1,6 +1,7 @@
 """Modelo de sorteios."""
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -26,3 +27,13 @@ class Sorteio(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    bilhetes = relationship(
+        "BilheteSorteio",
+        back_populates="sorteio",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def total_bilhetes(self) -> int:
+        return len(self.bilhetes)
