@@ -1,6 +1,6 @@
 """Rotas de campanhas: consulta publica, cadastro (admin) e inscricao (usuario)."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_
@@ -27,7 +27,7 @@ router = APIRouter(prefix="/campanhas", tags=["Campanhas"])
 @public
 def listar_campanhas(db: Session = Depends(get_db)):
     """Lista campanhas ativas dentro da janela de vigência."""
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     return (
         db.query(Campanha)
         .filter(
@@ -149,7 +149,7 @@ def participar_campanha(
     if not campanha:
         raise_not_found("Campanha nao encontrada.")
 
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     if campanha.status != "ativa":
         raise_bad_request("Campanha indisponivel para participacao.")
     if campanha.data_inicio is not None and campanha.data_inicio > agora:
