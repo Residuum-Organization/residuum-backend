@@ -163,7 +163,19 @@ async def confirmar_descarte(
     if descarte.ponto_coleta_id is None:
         raise_bad_request("Descarte sem ponto de coleta vinculado.")
 
-    validar_acesso_operacional_ao_ponto(usuario_operador, descarte.ponto_coleta)
+    usuario = db.query(Usuario).filter(
+        Usuario.id == descarte.usuario_id
+    ).with_for_update().first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuário do descarte não encontrado.")
+
+    ponto = db.query(PontoColeta).filter(
+        PontoColeta.id == descarte.ponto_coleta_id
+    ).with_for_update().first()
+    if not ponto:
+        raise HTTPException(status_code=404, detail="Ponto de coleta não encontrado.")
+
+    validar_acesso_operacional_ao_ponto(usuario_operador, ponto)
     if descarte.status != "pendente":
         raise HTTPException(status_code=409, detail="Apenas descartes pendentes podem ser confirmados.")
     if obj_in.quantidade_confirmada > float(descarte.quantidade):
@@ -179,29 +191,19 @@ async def confirmar_descarte(
             InventarioUsuario.usuario_id == descarte.usuario_id,
         ).with_for_update().first()
 
-    possui_identificacao = bool(
-        obj_in.codigo_barras_validado
-        or obj_in.sem_rotulo
-        or obj_in.identificacao_manual
-    )
-    if usuario_operador.role == "cooperativa" or possui_identificacao:
-        try:
-            codigo, sem_rotulo, descricao_manual = _validar_identificacao_do_ponto(
-                descarte,
-                item_inventario,
-                obj_in,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        descarte.codigo_barras_validado = codigo
-        descarte.sem_rotulo_validado = sem_rotulo
-        descarte.identificacao_manual = descricao_manual
-        descarte.identificado_em = datetime.now(timezone.utc)
-        descarte.identificado_por_id = usuario_operador.id
-
-    usuario = db.query(Usuario).filter(Usuario.id == descarte.usuario_id).first()
-    if not usuario:
-        raise HTTPException(status_code=404, detail="Usuário do descarte não encontrado.")
+    try:
+        codigo, sem_rotulo, descricao_manual = _validar_identificacao_do_ponto(
+            descarte,
+            item_inventario,
+            obj_in,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    descarte.codigo_barras_validado = codigo
+    descarte.sem_rotulo_validado = sem_rotulo
+    descarte.identificacao_manual = descricao_manual
+    descarte.identificado_em = datetime.now(timezone.utc)
+    descarte.identificado_por_id = usuario_operador.id
 
     pontos = calcular_pontos_proporcionais(descarte.quantidade, obj_in.quantidade_confirmada)
     descarte.quantidade_confirmada = obj_in.quantidade_confirmada

@@ -115,6 +115,17 @@ def _serializar_lote(lote: TransferenciaLote) -> dict:
     }
 
 
+def _buscar_lote_por_idempotencia(
+    db: Session,
+    usuario_id: int,
+    chave_idempotencia: str,
+) -> TransferenciaLote | None:
+    return db.query(TransferenciaLote).filter(
+        TransferenciaLote.usuario_id == usuario_id,
+        TransferenciaLote.chave_idempotencia == chave_idempotencia,
+    ).first()
+
+
 @router.post("", response_model=InventarioUsuarioResponse)
 def cadastrar_item_inventario(
     obj_in: InventarioUsuarioCreate,
@@ -166,10 +177,11 @@ def transferir_itens_em_lote(
     usuario: Usuario = Depends(get_current_user),
 ):
     """Reserva vários itens em uma única transação idempotente."""
-    lote_existente = db.query(TransferenciaLote).filter(
-        TransferenciaLote.usuario_id == usuario.id,
-        TransferenciaLote.chave_idempotencia == obj_in.chave_idempotencia,
-    ).first()
+    lote_existente = _buscar_lote_por_idempotencia(
+        db,
+        usuario.id,
+        obj_in.chave_idempotencia,
+    )
     if lote_existente:
         return _serializar_lote(lote_existente)
 
@@ -191,6 +203,16 @@ def transferir_itens_em_lote(
     }
     if len(itens_por_id) != len(obj_in.itens):
         raise HTTPException(status_code=404, detail="Um ou mais itens do inventário não foram encontrados.")
+
+    # Uma requisição concorrente pode ter criado o lote enquanto aguardávamos
+    # o bloqueio dos itens. A repetição deve devolver o resultado original.
+    lote_existente = _buscar_lote_por_idempotencia(
+        db,
+        usuario.id,
+        obj_in.chave_idempotencia,
+    )
+    if lote_existente:
+        return _serializar_lote(lote_existente)
 
     peso_total = 0.0
     for entrada in obj_in.itens:
@@ -240,10 +262,11 @@ def transferir_itens_em_lote(
         db.commit()
     except IntegrityError:
         db.rollback()
-        lote = db.query(TransferenciaLote).filter(
-            TransferenciaLote.usuario_id == usuario.id,
-            TransferenciaLote.chave_idempotencia == obj_in.chave_idempotencia,
-        ).first()
+        lote = _buscar_lote_por_idempotencia(
+            db,
+            usuario.id,
+            obj_in.chave_idempotencia,
+        )
         if not lote:
             raise
         return _serializar_lote(lote)
