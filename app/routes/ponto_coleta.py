@@ -1,12 +1,11 @@
 """
-Rotas de Ponto de Coleta e QR Code Token
+Rotas de Ponto de Coleta
 
-Gerencia os pontos de coleta e tokens para validação presencial via QR Code.
+Gerencia os pontos de coleta e seus dados operacionais.
 """
 
 from typing import Optional, List, Dict, Any
-import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import or_
@@ -22,7 +21,6 @@ from app.dependencies.auth import get_current_user, require_role, validar_acesso
 from app.models.usuario import Usuario
 from app.models.ponto_coleta import HorarioDisponibilidade
 from app.models.ponto_coleta import PontoColeta
-from app.models.qrcode_token import QRCodeToken
 from app.schemas.ponto_coleta import (
     PontoColetaCreate,
     PontoColetaDashboardResponse,
@@ -30,7 +28,6 @@ from app.schemas.ponto_coleta import (
     PontoColetaUpdate,
 )
 from app.schemas.ponto_coleta import HorarioCreate, HorarioResponse
-from app.schemas.qrcode_token import QRCodeTokenCreate, QRCodeTokenResponse, QRCodeTokenValidate
 from app.services.dashboard_ponto_coleta_service import montar_dashboard_ponto_coleta
 from app.services.ponto_coleta_service import (
     status_ponto_coleta,
@@ -39,7 +36,7 @@ from app.services.ponto_coleta_service import (
 )
 from app.services.localizacao_service import calcular_distancia_haversine, obter_coordenadas
 
-router = APIRouter(tags=["Ponto de Coleta e QR Code"])
+router = APIRouter(tags=["Ponto de Coleta"])
 
 
 # ========================
@@ -354,93 +351,3 @@ async def atualizar_horarios_ponto(
     # Busca novamente para retornar atualizado
     horarios_salvos = db.query(HorarioDisponibilidade).filter(HorarioDisponibilidade.ponto_coleta_id == ponto_id).all()
     return horarios_salvos
-# ========================
-# QR CODE TOKEN (RF013)
-# ========================
-
-@router.post("/qrcode-tokens", response_model=QRCodeTokenResponse, tags=["QR Code"])
-async def gerar_qrcode_token(
-    obj_in: QRCodeTokenCreate,
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa"))
-):
-    """
-    Gera um novo token QR Code para um ponto de coleta.
-    
-    RF013: Validação Alternativa via QR Code
-    O ponto de coleta gera um código/token único (UUID).
-    """
-    # Verifica se o ponto existe
-    ponto = db.query(PontoColeta).filter(PontoColeta.id == obj_in.ponto_coleta_id).first()
-    validar_acesso_operacional_ao_ponto(usuario, ponto)
-    validar_ponto_disponivel_para_descarte(ponto)
-    
-    # Gera um UUID único
-    token_uuid = str(uuid.uuid4())
-    
-    # Token válido por 1 hora
-    data_expiracao = datetime.utcnow() + timedelta(hours=1)
-    
-    novo_token = QRCodeToken(
-        token=token_uuid,
-        ponto_coleta_id=obj_in.ponto_coleta_id,
-        data_expiracao=data_expiracao,
-        ativo=1
-    )
-    db.add(novo_token)
-    db.commit()
-    db.refresh(novo_token)
-    
-    return novo_token
-
-
-@router.get("/qrcode-tokens/{ponto_id}", tags=["QR Code"])
-async def listar_tokens_ativos(
-    ponto_id: int,
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa"))
-):
-    """Lista todos os tokens ativos de um ponto de coleta."""
-    ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
-    validar_acesso_operacional_ao_ponto(usuario, ponto)
-    validar_ponto_disponivel_para_descarte(ponto)
-
-    tokens = db.query(QRCodeToken).filter(
-        QRCodeToken.ponto_coleta_id == ponto_id,
-        QRCodeToken.ativo == 1,
-        QRCodeToken.data_expiracao > datetime.utcnow()
-    ).all()
-    return tokens
-
-
-@router.post("/qrcode-tokens/validar", tags=["QR Code"])
-async def validar_qrcode_token(
-    obj_in: QRCodeTokenValidate,
-    db: Session = Depends(get_db)
-):
-    """
-    Valida um token QR Code.
-    
-    Usado antes de fazer o descarte para confirmar que o usuário está presencialmente
-    no ponto de coleta.
-    """
-    token = db.query(QRCodeToken).filter(
-        QRCodeToken.token == obj_in.token,
-        QRCodeToken.ativo == 1,
-        QRCodeToken.data_expiracao > datetime.utcnow()
-    ).first()
-    
-    if not token:
-        raise HTTPException(status_code=403, detail="Token inválido ou expirado.")
-    
-    # Retorna os dados do ponto de coleta
-    ponto = db.query(PontoColeta).filter(PontoColeta.id == token.ponto_coleta_id).first()
-    if ponto:
-        validar_ponto_disponivel_para_descarte(ponto)
-    
-    return {
-        "valido": True,
-        "ponto_coleta_id": token.ponto_coleta_id,
-        "ponto_nome": ponto.nome if ponto else "Desconhecido",
-        "token": token.token
-    }

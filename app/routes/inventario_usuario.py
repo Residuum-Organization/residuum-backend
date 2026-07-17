@@ -1,32 +1,35 @@
-"""
-Rotas do Inventário do Usuário - Task 11.
+"""Rotas do inventário pessoal e transferências para pontos de coleta."""
 
-Permite cadastrar, consultar, atualizar e transferir resíduos que o usuário
-possui antes da confirmação em um ponto de coleta.
-"""
+from uuid import uuid4
 
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import raise_not_found
 from app.database import get_db
 from app.dependencies.auth import get_current_user
-from app.models.usuario import Usuario
-from app.models.inventario_usuario import InventarioUsuario
 from app.models.descarte import Descarte
+from app.models.inventario_usuario import InventarioUsuario
 from app.models.ponto_coleta import PontoColeta
-from app.models.qrcode_token import QRCodeToken
-from app.schemas.inventario_usuario import (
-    InventarioUsuarioCreate,
-    InventarioUsuarioUpdate,
-    InventarioUsuarioTransferir,
-    InventarioUsuarioResponse,
-)
+from app.models.transferencia_lote import TransferenciaLote
+from app.models.usuario import Usuario
 from app.schemas.descarte import DescarteResponse
-from app.services.validacao_service import validar_quantidade, validar_residuo
+from app.schemas.inventario_usuario import (
+    InventarioLoteTransferir,
+    InventarioUsuarioCreate,
+    InventarioUsuarioResponse,
+    InventarioUsuarioTransferir,
+    InventarioUsuarioUpdate,
+    TransferenciaLoteResponse,
+)
+from app.services.identificacao_residuo_service import validar_identificacao_cadastro
 from app.services.localizacao_service import validar_localizacao
-from app.services.ponto_coleta_service import validar_ponto_disponivel_para_descarte
+from app.services.ponto_coleta_service import (
+    validar_ponto_disponivel_para_descarte,
+    validar_residuo_aceito_no_ponto,
+)
+from app.services.pontuacao_service import calcular_pontos_proporcionais
+from app.services.validacao_service import validar_quantidade, validar_residuo
 
 router = APIRouter(prefix="/me/inventario", tags=["Inventário do Usuário"])
 
@@ -57,20 +60,75 @@ def _recalcular_status(item: InventarioUsuario) -> None:
         item.status = "disponivel"
 
 
+def _validar_ponto_e_gps(
+    db: Session,
+    *,
+    ponto_coleta_id: int,
+    usuario_lat: float,
+    usuario_long: float,
+) -> PontoColeta:
+    ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_coleta_id).first()
+    if not ponto:
+        raise HTTPException(status_code=404, detail="Ponto de coleta não encontrado.")
+
+    validar_ponto_disponivel_para_descarte(ponto)
+    if not validar_localizacao(
+        usuario_lat,
+        usuario_long,
+        ponto.latitude,
+        ponto.longitude,
+        ponto.raio_operacao,
+    ):
+        raise HTTPException(status_code=403, detail="Você está muito longe do ponto de coleta.")
+
+    return ponto
+
+
+def _validar_item_para_transferencia(item: InventarioUsuario, quantidade: float) -> None:
+    if item.status in {"cancelado", "finalizado"}:
+        raise HTTPException(status_code=400, detail=f"Item #{item.id} indisponível para descarte.")
+    if not validar_quantidade(quantidade):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Quantidade inválida para o item #{item.id}. O valor deve estar entre 1 e 1000.",
+        )
+
+    disponivel = _quantidade_disponivel(item)
+    if quantidade > disponivel:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Quantidade indisponível no item #{item.id}. Disponível: {disponivel} kg.",
+        )
+
+
+def _serializar_lote(lote: TransferenciaLote) -> dict:
+    return {
+        "id": lote.id,
+        "status": lote.status,
+        "ponto_coleta_id": lote.ponto_coleta_id,
+        "ponto_coleta_nome": lote.ponto_coleta.nome,
+        "total_itens": lote.total_itens,
+        "peso_total": lote.peso_total,
+        "pontos_estimados": lote.pontos_estimados,
+        "descarte_ids": [descarte.id_descarte for descarte in lote.descartes],
+        "data_criacao": lote.data_criacao,
+    }
+
+
 @router.post("", response_model=InventarioUsuarioResponse)
 def cadastrar_item_inventario(
     obj_in: InventarioUsuarioCreate,
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
 ):
-    """Cadastra um resíduo no inventário pessoal do usuário autenticado."""
     tipo_residuo = _normalizar_tipo_residuo(obj_in.tipo_residuo)
-
     if not validar_residuo(tipo_residuo):
         raise HTTPException(status_code=400, detail="Tipo de resíduo não aceito.")
-
     if not validar_quantidade(obj_in.quantidade):
-        raise HTTPException(status_code=400, detail="Quantidade inválida. O valor deve estar entre 1 e 1000.")
+        raise HTTPException(
+            status_code=400,
+            detail="Quantidade inválida. O valor deve estar entre 1 e 1000.",
+        )
 
     item = InventarioUsuario(
         usuario_id=usuario.id,
@@ -79,6 +137,8 @@ def cadastrar_item_inventario(
         quantidade_reservada=0,
         descricao=obj_in.descricao,
         observacao=obj_in.observacao,
+        codigo_barras=obj_in.codigo_barras,
+        sem_rotulo=obj_in.sem_rotulo,
         status="disponivel",
     )
     db.add(item)
@@ -93,13 +153,118 @@ def listar_inventario(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
 ):
-    """Lista os resíduos cadastrados no inventário do usuário autenticado."""
     query = db.query(InventarioUsuario).filter(InventarioUsuario.usuario_id == usuario.id)
-
     if status:
         query = query.filter(InventarioUsuario.status == status)
-
     return query.order_by(InventarioUsuario.data_cadastro.desc()).all()
+
+
+@router.post("/transferencias", response_model=TransferenciaLoteResponse)
+def transferir_itens_em_lote(
+    obj_in: InventarioLoteTransferir,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    """Reserva vários itens em uma única transação idempotente."""
+    lote_existente = db.query(TransferenciaLote).filter(
+        TransferenciaLote.usuario_id == usuario.id,
+        TransferenciaLote.chave_idempotencia == obj_in.chave_idempotencia,
+    ).first()
+    if lote_existente:
+        return _serializar_lote(lote_existente)
+
+    ponto = _validar_ponto_e_gps(
+        db,
+        ponto_coleta_id=obj_in.ponto_coleta_id,
+        usuario_lat=obj_in.usuario_lat,
+        usuario_long=obj_in.usuario_long,
+    )
+    itens_por_id = {
+        item.id: item
+        for item in db.query(InventarioUsuario)
+        .filter(
+            InventarioUsuario.usuario_id == usuario.id,
+            InventarioUsuario.id.in_([entrada.item_id for entrada in obj_in.itens]),
+        )
+        .with_for_update()
+        .all()
+    }
+    if len(itens_por_id) != len(obj_in.itens):
+        raise HTTPException(status_code=404, detail="Um ou mais itens do inventário não foram encontrados.")
+
+    peso_total = 0.0
+    for entrada in obj_in.itens:
+        item = itens_por_id[entrada.item_id]
+        _validar_item_para_transferencia(item, entrada.quantidade)
+        validar_residuo_aceito_no_ponto(ponto, item.tipo_residuo)
+        peso_total += float(entrada.quantidade)
+
+    lote = TransferenciaLote(
+        id=str(uuid4()),
+        usuario_id=usuario.id,
+        ponto_coleta_id=ponto.id,
+        chave_idempotencia=obj_in.chave_idempotencia,
+        usuario_lat=obj_in.usuario_lat,
+        usuario_long=obj_in.usuario_long,
+        usuario_precisao=obj_in.usuario_precisao,
+        status="pendente",
+        total_itens=len(obj_in.itens),
+        peso_total=peso_total,
+        pontos_estimados=calcular_pontos_proporcionais(peso_total, peso_total),
+    )
+    db.add(lote)
+
+    for entrada in obj_in.itens:
+        item = itens_por_id[entrada.item_id]
+        item.quantidade_reservada = float(item.quantidade_reservada or 0) + float(entrada.quantidade)
+        _recalcular_status(item)
+        db.add(
+            Descarte(
+                quantidade=entrada.quantidade,
+                tipo_residuo=item.tipo_residuo,
+                observacao=obj_in.observacao,
+                status="pendente",
+                usuario_id=usuario.id,
+                usuario_lat=obj_in.usuario_lat,
+                usuario_long=obj_in.usuario_long,
+                usuario_precisao=obj_in.usuario_precisao,
+                ponto_lat=ponto.latitude,
+                ponto_long=ponto.longitude,
+                ponto_coleta_id=ponto.id,
+                inventario_usuario_id=item.id,
+                transferencia_lote_id=lote.id,
+            )
+        )
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        lote = db.query(TransferenciaLote).filter(
+            TransferenciaLote.usuario_id == usuario.id,
+            TransferenciaLote.chave_idempotencia == obj_in.chave_idempotencia,
+        ).first()
+        if not lote:
+            raise
+        return _serializar_lote(lote)
+
+    db.refresh(lote)
+    return _serializar_lote(lote)
+
+
+@router.get("/transferencias/{lote_id}", response_model=TransferenciaLoteResponse)
+def obter_transferencia_em_lote(
+    lote_id: str,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    lote = db.query(TransferenciaLote).filter(
+        TransferenciaLote.id == lote_id,
+        TransferenciaLote.usuario_id == usuario.id,
+    ).first()
+    if not lote:
+        raise HTTPException(status_code=404, detail="Transferência não encontrada.")
+    return _serializar_lote(lote)
 
 
 @router.get("/{item_id}", response_model=InventarioUsuarioResponse)
@@ -112,10 +277,8 @@ def obter_item_inventario(
         InventarioUsuario.id == item_id,
         InventarioUsuario.usuario_id == usuario.id,
     ).first()
-
     if not item:
         raise HTTPException(status_code=404, detail="Item do inventário não encontrado.")
-
     return item
 
 
@@ -126,34 +289,50 @@ def atualizar_item_inventario(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
 ):
-    """Atualiza dados do item. Não permite reduzir abaixo da quantidade reservada."""
     item = db.query(InventarioUsuario).filter(
         InventarioUsuario.id == item_id,
         InventarioUsuario.usuario_id == usuario.id,
     ).first()
-
     if not item:
         raise HTTPException(status_code=404, detail="Item do inventário não encontrado.")
-
     if item.status == "cancelado":
         raise HTTPException(status_code=400, detail="Item cancelado não pode ser atualizado.")
+
+    campos = obj_in.model_fields_set
+    identificacao_alterada = bool({"codigo_barras", "sem_rotulo"} & campos)
+    if identificacao_alterada and float(item.quantidade_reservada or 0) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="A identificação não pode ser alterada enquanto houver descarte pendente.",
+        )
+
+    if identificacao_alterada:
+        sem_rotulo = obj_in.sem_rotulo if "sem_rotulo" in campos else bool(item.sem_rotulo)
+        codigo_barras = obj_in.codigo_barras if "codigo_barras" in campos else item.codigo_barras
+        try:
+            codigo_barras = validar_identificacao_cadastro(codigo_barras, sem_rotulo)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        item.sem_rotulo = sem_rotulo
+        item.codigo_barras = codigo_barras
 
     if obj_in.tipo_residuo is not None:
         tipo_residuo = _normalizar_tipo_residuo(obj_in.tipo_residuo)
         if not validar_residuo(tipo_residuo):
             raise HTTPException(status_code=400, detail="Tipo de resíduo não aceito.")
         item.tipo_residuo = tipo_residuo
-
     if obj_in.quantidade is not None:
         if not validar_quantidade(obj_in.quantidade):
-            raise HTTPException(status_code=400, detail="Quantidade inválida. O valor deve estar entre 1 e 1000.")
+            raise HTTPException(
+                status_code=400,
+                detail="Quantidade inválida. O valor deve estar entre 1 e 1000.",
+            )
         if obj_in.quantidade < float(item.quantidade_reservada or 0):
             raise HTTPException(
                 status_code=400,
-                detail="A quantidade total não pode ser menor que a quantidade reservada em descartes pendentes.",
+                detail="A quantidade total não pode ser menor que a quantidade reservada.",
             )
         item.quantidade = obj_in.quantidade
-
     if obj_in.descricao is not None:
         item.descricao = obj_in.descricao
     if obj_in.observacao is not None:
@@ -176,24 +355,20 @@ def remover_item_inventario(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
 ):
-    """Remove logicamente o item do inventário, desde que não haja quantidade reservada."""
     item = db.query(InventarioUsuario).filter(
         InventarioUsuario.id == item_id,
         InventarioUsuario.usuario_id == usuario.id,
     ).first()
-
     if not item:
         raise HTTPException(status_code=404, detail="Item do inventário não encontrado.")
-
     if float(item.quantidade_reservada or 0) > 0:
         raise HTTPException(
             status_code=400,
-            detail="Não é possível remover item com quantidade reservada em descarte pendente.",
+            detail="Não é possível remover item com quantidade reservada.",
         )
 
     item.status = "cancelado"
     db.commit()
-
     return {"mensagem": "Item removido do inventário com sucesso.", "id": item.id, "status": item.status}
 
 
@@ -204,62 +379,21 @@ def descartar_item_inventario(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
 ):
-    """
-    Cria um descarte pendente usando um item do inventário pessoal.
-
-    O item fica reservado até a confirmação pela cooperativa/admin. Na confirmação,
-    a quantidade confirmada é baixada do inventário do usuário e transferida para
-    o inventário do ponto de coleta.
-    """
     item = db.query(InventarioUsuario).filter(
         InventarioUsuario.id == item_id,
         InventarioUsuario.usuario_id == usuario.id,
-    ).first()
-
+    ).with_for_update().first()
     if not item:
         raise HTTPException(status_code=404, detail="Item do inventário não encontrado.")
 
-    if item.status in {"cancelado", "finalizado"}:
-        raise HTTPException(status_code=400, detail="Item indisponível para descarte.")
-
-    if not validar_quantidade(obj_in.quantidade):
-        raise HTTPException(status_code=400, detail="Quantidade inválida. O valor deve estar entre 1 e 1000.")
-
-    disponivel = _quantidade_disponivel(item)
-    if obj_in.quantidade > disponivel:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Quantidade indisponível no inventário. Disponível: {disponivel} kg.",
-        )
-
-    ponto = db.query(PontoColeta).filter(PontoColeta.id == obj_in.ponto_coleta_id).first()
-    if not ponto:
-        raise_not_found("Ponto de coleta não encontrado.")
-    validar_ponto_disponivel_para_descarte(ponto)
-
-    validacao_qrcode = False
-    qr_token = None
-
-    if obj_in.qrcode_token:
-        qr_token = db.query(QRCodeToken).filter(
-            QRCodeToken.token == obj_in.qrcode_token,
-            QRCodeToken.ponto_coleta_id == obj_in.ponto_coleta_id,
-            QRCodeToken.ativo == 1,
-            QRCodeToken.data_expiracao > datetime.utcnow(),
-        ).first()
-        if not qr_token:
-            raise HTTPException(status_code=403, detail="Token QR Code inválido ou expirado.")
-        validacao_qrcode = True
-    else:
-        if not validar_localizacao(
-            obj_in.usuario_lat,
-            obj_in.usuario_long,
-            ponto.latitude,
-            ponto.longitude,
-            ponto.raio_operacao,
-        ):
-            raise HTTPException(status_code=403, detail="Muito longe do ponto de coleta.")
-
+    _validar_item_para_transferencia(item, obj_in.quantidade)
+    ponto = _validar_ponto_e_gps(
+        db,
+        ponto_coleta_id=obj_in.ponto_coleta_id,
+        usuario_lat=obj_in.usuario_lat,
+        usuario_long=obj_in.usuario_long,
+    )
+    validar_residuo_aceito_no_ponto(ponto, item.tipo_residuo)
     novo_descarte = Descarte(
         quantidade=obj_in.quantidade,
         tipo_residuo=item.tipo_residuo,
@@ -268,24 +402,16 @@ def descartar_item_inventario(
         usuario_id=usuario.id,
         usuario_lat=obj_in.usuario_lat,
         usuario_long=obj_in.usuario_long,
+        usuario_precisao=obj_in.usuario_precisao,
         ponto_lat=ponto.latitude,
         ponto_long=ponto.longitude,
         ponto_coleta_id=ponto.id,
-        qrcode_token_id=qr_token.id if validacao_qrcode else None,
         inventario_usuario_id=item.id,
     )
-
     item.quantidade_reservada = float(item.quantidade_reservada or 0) + float(obj_in.quantidade)
     _recalcular_status(item)
 
     db.add(novo_descarte)
     db.commit()
     db.refresh(novo_descarte)
-
-    if validacao_qrcode and qr_token:
-        qr_token.descarte_id = novo_descarte.id_descarte
-        qr_token.ativo = 0
-        db.commit()
-        db.refresh(qr_token)
-
     return novo_descarte

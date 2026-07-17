@@ -1,6 +1,7 @@
 """Regras compartilhadas de ponto de coleta."""
 
 from datetime import datetime
+import unicodedata
 
 from app.core.exceptions import raise_conflict
 from app.models.ponto_coleta import PontoColeta
@@ -45,3 +46,19 @@ def validar_ponto_disponivel_para_descarte(ponto: PontoColeta) -> None:
 
     if status_atual == "cheio":
         raise_conflict("Ponto de coleta cheio no momento.")
+
+
+def _normalizar_tipo_residuo(tipo_residuo: str) -> str:
+    texto = unicodedata.normalize("NFKD", str(tipo_residuo or ""))
+    return "".join(caractere for caractere in texto if not unicodedata.combining(caractere)).strip().lower()
+
+
+def validar_residuo_aceito_no_ponto(ponto: PontoColeta, tipo_residuo: str) -> None:
+    """Impede transferências de materiais fora da lista configurada pelo ponto."""
+    tipos_aceitos = {
+        _normalizar_tipo_residuo(tipo)
+        for tipo in (ponto.tipos_residuos_aceitos or [])
+        if str(tipo or "").strip()
+    }
+    if tipos_aceitos and _normalizar_tipo_residuo(tipo_residuo) not in tipos_aceitos:
+        raise_conflict("O ponto de coleta selecionado não aceita este tipo de resíduo.")
