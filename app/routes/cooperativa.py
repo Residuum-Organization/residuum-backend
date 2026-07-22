@@ -1,12 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies.auth import require_role, validar_acesso_operacional_ao_ponto
 from app.models.descarte import Descarte
 from app.models.ponto_coleta import PontoColeta
+from app.models.solicitacao_coleta import SolicitacaoColeta
 from app.models.usuario import Usuario
 from app.schemas.admin import RejeitarDescarteRequest
+from app.schemas.solicitacao_coleta import SolicitacaoColetaRecusar, SolicitacaoColetaResponse
 from app.services.descarte_service import rejeitar_descarte_pendente
 
 
@@ -14,6 +18,114 @@ router = APIRouter(
     prefix="/cooperativa",
     tags=["Cooperativa"],
 )
+
+
+@router.get("/solicitacoes-coleta", response_model=list[SolicitacaoColetaResponse])
+def listar_solicitacoes_coleta(
+    db: Session = Depends(get_db),
+    cooperativa: Usuario = Depends(require_role("cooperativa")),
+):
+    """Lista solicitações encaminhadas à cooperativa autenticada."""
+    return (
+        db.query(SolicitacaoColeta)
+        .filter(SolicitacaoColeta.cooperativa_id == cooperativa.id)
+        .order_by(SolicitacaoColeta.data_solicitacao.desc())
+        .all()
+    )
+
+
+@router.post(
+    "/solicitacoes-coleta/{solicitacao_id}/aceitar",
+    response_model=SolicitacaoColetaResponse,
+)
+def aceitar_solicitacao_coleta(
+    solicitacao_id: int,
+    db: Session = Depends(get_db),
+    cooperativa: Usuario = Depends(require_role("cooperativa")),
+):
+    solicitacao = (
+        db.query(SolicitacaoColeta)
+        .filter(
+            SolicitacaoColeta.id == solicitacao_id,
+            SolicitacaoColeta.cooperativa_id == cooperativa.id,
+        )
+        .first()
+    )
+    if not solicitacao:
+        raise HTTPException(status_code=404, detail="Solicitação de coleta não encontrada")
+    if solicitacao.status != "solicitada":
+        raise HTTPException(status_code=409, detail="A solicitação não está disponível para aceite")
+
+    solicitacao.status = "aceita"
+    solicitacao.data_aceite = datetime.utcnow()
+    db.commit()
+    db.refresh(solicitacao)
+    return solicitacao
+
+
+@router.post(
+    "/solicitacoes-coleta/{solicitacao_id}/concluir",
+    response_model=SolicitacaoColetaResponse,
+)
+def concluir_solicitacao_coleta(
+    solicitacao_id: int,
+    db: Session = Depends(get_db),
+    cooperativa: Usuario = Depends(require_role("cooperativa")),
+):
+    """Conclui a retirada integral do inventário capturado na solicitação."""
+    solicitacao = (
+        db.query(SolicitacaoColeta)
+        .filter(
+            SolicitacaoColeta.id == solicitacao_id,
+            SolicitacaoColeta.cooperativa_id == cooperativa.id,
+        )
+        .first()
+    )
+    if not solicitacao:
+        raise HTTPException(status_code=404, detail="Solicitação de coleta não encontrada")
+    if solicitacao.status != "aceita":
+        raise HTTPException(status_code=409, detail="A solicitação precisa ser aceita antes da conclusão")
+
+    ponto = solicitacao.ponto_coleta
+    quantidade_coletada = sum(float(valor or 0) for valor in (ponto.inventario or {}).values())
+    ponto.inventario = {}
+    ponto.status = "ativo"
+    solicitacao.quantidade_coletada = quantidade_coletada
+    solicitacao.status = "concluida"
+    solicitacao.data_conclusao = datetime.utcnow()
+    db.commit()
+    db.refresh(solicitacao)
+    return solicitacao
+
+
+@router.post(
+    "/solicitacoes-coleta/{solicitacao_id}/recusar",
+    response_model=SolicitacaoColetaResponse,
+)
+def recusar_solicitacao_coleta(
+    solicitacao_id: int,
+    payload: SolicitacaoColetaRecusar,
+    db: Session = Depends(get_db),
+    cooperativa: Usuario = Depends(require_role("cooperativa")),
+):
+    solicitacao = (
+        db.query(SolicitacaoColeta)
+        .filter(
+            SolicitacaoColeta.id == solicitacao_id,
+            SolicitacaoColeta.cooperativa_id == cooperativa.id,
+        )
+        .first()
+    )
+    if not solicitacao:
+        raise HTTPException(status_code=404, detail="Solicitação de coleta não encontrada")
+    if solicitacao.status != "solicitada":
+        raise HTTPException(status_code=409, detail="A solicitação não está disponível para recusa")
+
+    solicitacao.status = "recusada"
+    solicitacao.motivo_recusa = payload.motivo
+    db.commit()
+    db.refresh(solicitacao)
+    return solicitacao
 
 
 @router.get("/pontos-coleta")
