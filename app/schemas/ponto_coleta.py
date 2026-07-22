@@ -48,7 +48,7 @@ class PontoColetaCreate(BaseModel):
     horario_funcionamento: Optional[str] = None
     status: Optional[str] = Field(default="ativo", description="ativo, cheio ou inativo")
     data_final: Optional[datetime] = Field(default=None, description="Data limite para pontos temporários")
-    cooperativa_id: Optional[int] = Field(default=None, description="Usuário com role=cooperativa responsável pelo ponto")
+    cooperativa_id: Optional[int] = Field(default=None, description="Conta do ponto com role=ponto_coleta")
 
 class PontoColetaUpdate(BaseModel):
     """Modelo para atualização de um ponto de coleta."""

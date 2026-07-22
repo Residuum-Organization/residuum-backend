@@ -140,12 +140,12 @@ async def ver_historico_geral(
 @router.get("/pendentes")
 async def listar_descartes_pendentes(
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario: Usuario = Depends(require_role("admin", "ponto_coleta")),
 ):
-    """Lista todos os descartes com status 'pendente' para confirmação pela cooperativa."""
+    """Lista descartes pendentes para confirmação pelo admin ou ponto de coleta."""
     query = db.query(Descarte).filter(Descarte.status == 'pendente')
 
-    if usuario.role == "cooperativa":
+    if usuario.role == "ponto_coleta":
         query = query.join(PontoColeta, Descarte.ponto_coleta_id == PontoColeta.id).filter(
             PontoColeta.cooperativa_id == usuario.id
         )
@@ -158,12 +158,12 @@ async def confirmar_descarte(
     id_descarte: int,
     obj_in: DescarteConfirmar,
     db: Session = Depends(get_db),
-    usuario_operador: Usuario = Depends(require_role("admin", "cooperativa"))
+    usuario_operador: Usuario = Depends(require_role("admin", "ponto_coleta"))
 ):
     """
     Confirma o descarte e calcula pontos (RF014).
     
-    Apenas admin ou a cooperativa responsável pelo ponto podem confirmar.
+    Apenas admin ou a conta do ponto de coleta podem confirmar.
     O sistema calcula 10 pontos por cada 1kg confirmado.
     """
     descarte = db.query(Descarte).filter(Descarte.id_descarte == id_descarte).first()

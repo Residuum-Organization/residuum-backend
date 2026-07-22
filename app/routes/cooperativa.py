@@ -131,12 +131,12 @@ def recusar_solicitacao_coleta(
 @router.get("/pontos-coleta")
 def listar_pontos_da_cooperativa(
     db: Session = Depends(get_db),
-    cooperativa: Usuario = Depends(require_role("cooperativa")),
+    ponto_coleta: Usuario = Depends(require_role("ponto_coleta")),
 ):
-    """Lista somente os pontos sob responsabilidade da conta operacional."""
+    """Lista o ponto vinculado à conta de ponto de coleta autenticada."""
     pontos = (
         db.query(PontoColeta)
-        .filter(PontoColeta.cooperativa_id == cooperativa.id)
+        .filter(PontoColeta.cooperativa_id == ponto_coleta.id)
         .order_by(PontoColeta.nome)
         .all()
     )
@@ -163,7 +163,7 @@ def rejeitar_descarte_cooperativa(
     id_descarte: int,
     payload: RejeitarDescarteRequest,
     db: Session = Depends(get_db),
-    cooperativa: Usuario = Depends(require_role("cooperativa")),
+    ponto_coleta: Usuario = Depends(require_role("ponto_coleta")),
 ):
     """Rejeita descarte pendente vinculado a ponto da cooperativa autenticada."""
     descarte = (
@@ -172,8 +172,8 @@ def rejeitar_descarte_cooperativa(
     if not descarte:
         raise HTTPException(status_code=404, detail="Descarte nao encontrado")
 
-    validar_acesso_operacional_ao_ponto(cooperativa, descarte.ponto_coleta)
-    rejeitar_descarte_pendente(db, descarte, cooperativa, payload.motivo)
+    validar_acesso_operacional_ao_ponto(ponto_coleta, descarte.ponto_coleta)
+    rejeitar_descarte_pendente(db, descarte, ponto_coleta, payload.motivo)
 
     db.commit()
     db.refresh(descarte)

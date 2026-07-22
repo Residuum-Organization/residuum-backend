@@ -80,14 +80,14 @@ def require_role(*roles: str):
 
 
 def validar_acesso_operacional_ao_ponto(usuario: Usuario, ponto: PontoColeta | None) -> PontoColeta:
-    """Garante que apenas admin ou a cooperativa designada operem um ponto."""
+    """Garante que apenas admin ou a conta do ponto operem um ponto."""
     if not ponto:
         raise_not_found("Ponto de coleta não encontrado.")
 
     if usuario.role == "admin":
         return ponto
 
-    if usuario.role == "cooperativa" and ponto.cooperativa_id == usuario.id:
+    if usuario.role == "ponto_coleta" and ponto.cooperativa_id == usuario.id:
         return ponto
 
     raise_forbidden("Permissão insuficiente para operar este ponto de coleta")

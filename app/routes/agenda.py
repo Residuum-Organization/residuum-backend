@@ -14,7 +14,7 @@ router = APIRouter(prefix="/admin/agenda", tags=["Agenda"])
 
 def _validar_ponto(db: Session, ponto_id: int, usuario: Usuario) -> PontoColeta:
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
-    if not ponto or (usuario.role == "cooperativa" and ponto.cooperativa_id != usuario.id):
+    if not ponto or (usuario.role == "ponto_coleta" and ponto.cooperativa_id != usuario.id):
         raise_not_found("Ponto de coleta nao encontrado.")
     return ponto
 
@@ -22,7 +22,7 @@ def _validar_ponto(db: Session, ponto_id: int, usuario: Usuario) -> PontoColeta:
 def _validar_agenda(db: Session, agenda_id: int, usuario: Usuario) -> Agenda:
     agenda = db.query(Agenda).filter(Agenda.id == agenda_id).first()
     if not agenda or (
-        usuario.role == "cooperativa"
+        usuario.role == "ponto_coleta"
         and agenda.ponto_coleta.cooperativa_id != usuario.id
     ):
         raise_not_found("Agendamento nao encontrado.")
@@ -35,7 +35,7 @@ def listar_agendas(
     usuario: Usuario = Depends(require_role("admin", "cooperativa")),
 ):
     query = db.query(Agenda)
-    if usuario.role == "cooperativa":
+    if usuario.role == "ponto_coleta":
         query = query.join(PontoColeta).filter(PontoColeta.cooperativa_id == usuario.id)
     return query.order_by(Agenda.data.desc()).all()
 
@@ -44,7 +44,7 @@ def listar_agendas(
 def criar_agendamento(
     payload: AgendaCreate,
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario: Usuario = Depends(require_role("admin", "ponto_coleta")),
 ):
     _validar_ponto(db, payload.ponto_coleta_id, usuario)
     agenda = Agenda(
@@ -64,7 +64,7 @@ def atualizar_agendamento(
     agenda_id: int,
     payload: AgendaUpdate,
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario: Usuario = Depends(require_role("admin", "ponto_coleta")),
 ):
     agenda = _validar_agenda(db, agenda_id, usuario)
     if payload.ponto_coleta_id is not None:
@@ -82,7 +82,7 @@ def atualizar_agendamento(
 def deletar_agendamento(
     agenda_id: int,
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario: Usuario = Depends(require_role("admin", "ponto_coleta")),
 ):
     agenda = _validar_agenda(db, agenda_id, usuario)
     db.delete(agenda)

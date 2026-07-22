@@ -251,7 +251,7 @@ def alterar_role(
             detail="Você não pode remover seu próprio role de admin",
         )
 
-    if usuario.role == "cooperativa" and payload.role != "cooperativa":
+    if usuario.role in {"cooperativa", "ponto_coleta"} and payload.role != usuario.role:
         possui_pontos_vinculados = db.query(PontoColeta.id).filter(PontoColeta.cooperativa_id == usuario.id).first()
         if possui_pontos_vinculados:
             raise_bad_request("Reatribua os pontos de coleta desta cooperativa antes de alterar o role.")
@@ -613,7 +613,7 @@ def aprovar_solicitacao_ponto_coleta(
     """Aprova uma solicitação pendente.
 
     Ao aprovar: altera o status para `aprovada`, cria o ponto de coleta real
-    com status `ativo` e promove o usuário solicitante para o role `cooperativa`.
+    com status `ativo` e promove o usuário solicitante para o role `ponto_coleta`.
     """
     solicitacao = (
         db.query(SolicitacaoPontoColeta)
@@ -635,7 +635,7 @@ def aprovar_solicitacao_ponto_coleta(
             raise HTTPException(status_code=404, detail="Usuário solicitante não encontrado")
         role_anterior = solicitante.role
         if solicitante.role != "admin":
-            solicitante.role = "cooperativa"
+            solicitante.role = "ponto_coleta"
     else:
         if db.query(Usuario.id).filter(Usuario.email == solicitacao.email).first():
             raise_bad_request(
@@ -652,7 +652,7 @@ def aprovar_solicitacao_ponto_coleta(
             email=solicitacao.email,
             telefone=solicitacao.responsavel_telefone,
             senha_hash=solicitacao.senha_hash,
-            role="cooperativa",
+            role="ponto_coleta",
             pontuacao_total=0,
         )
         db.add(solicitante)
