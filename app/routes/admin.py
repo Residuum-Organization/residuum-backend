@@ -110,6 +110,7 @@ def solicitar_coleta(
         ponto_coleta_id=ponto.id,
         percentual_ocupacao=dashboard["percentual_ocupacao"],
         quantidade_inventario=dashboard["quantidade_total"],
+        inventario_solicitado=dict(ponto.inventario or {}),
         capacidade_maxima=ponto.capacidade_maxima,
         observacao=payload.observacao,
     )

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,7 @@ class SolicitacaoColetaResponse(BaseModel):
     status: str
     percentual_ocupacao: Optional[float] = None
     quantidade_inventario: float
+    inventario_solicitado: Dict[str, Any]
     quantidade_coletada: Optional[float] = None
     capacidade_maxima: Optional[float] = None
     observacao: Optional[str] = None

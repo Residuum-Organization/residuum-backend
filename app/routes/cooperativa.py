@@ -87,8 +87,23 @@ def concluir_solicitacao_coleta(
         raise HTTPException(status_code=409, detail="A solicitação precisa ser aceita antes da conclusão")
 
     ponto = solicitacao.ponto_coleta
-    quantidade_coletada = sum(float(valor or 0) for valor in (ponto.inventario or {}).values())
-    ponto.inventario = {}
+    inventario_atual = dict(ponto.inventario or {})
+    inventario_solicitado = solicitacao.inventario_solicitado or {}
+    quantidade_coletada = 0.0
+
+    for tipo_residuo, quantidade_solicitada in inventario_solicitado.items():
+        quantidade_solicitada = max(float(quantidade_solicitada or 0), 0.0)
+        quantidade_disponivel = max(float(inventario_atual.get(tipo_residuo, 0) or 0), 0.0)
+        quantidade_retirada = min(quantidade_solicitada, quantidade_disponivel)
+        saldo = quantidade_disponivel - quantidade_retirada
+        quantidade_coletada += quantidade_retirada
+
+        if saldo > 0:
+            inventario_atual[tipo_residuo] = saldo
+        else:
+            inventario_atual.pop(tipo_residuo, None)
+
+    ponto.inventario = inventario_atual
     ponto.status = "ativo"
     solicitacao.quantidade_coletada = quantidade_coletada
     solicitacao.status = "concluida"

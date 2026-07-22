@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -16,6 +16,7 @@ class SolicitacaoColeta(Base):
     status = Column(String(30), nullable=False, server_default="solicitada", index=True)
     percentual_ocupacao = Column(Float, nullable=True)
     quantidade_inventario = Column(Float, nullable=False)
+    inventario_solicitado = Column(JSON, nullable=False, default=dict)
     quantidade_coletada = Column(Float, nullable=True)
     capacidade_maxima = Column(Float, nullable=True)
     observacao = Column(Text, nullable=True)
