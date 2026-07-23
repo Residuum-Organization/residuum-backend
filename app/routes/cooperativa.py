@@ -13,7 +13,7 @@ from app.schemas.admin import RejeitarDescarteRequest
 from app.schemas.solicitacao_coleta import SolicitacaoColetaRecusar, SolicitacaoColetaResponse
 from app.services.descarte_service import rejeitar_descarte_pendente
 from app.core.decorators import public
-
+from app.schemas.usuario import CooperativaCreate
 from app.services.password_service import hash_senha
 
 router = APIRouter(
@@ -24,21 +24,21 @@ router = APIRouter(
 @router.post("/cadastro-cooperativa", status_code=status.HTTP_201_CREATED)
 @public
 def cadastrar_cooperativa(
-    payload: dict,
+    payload: CooperativaCreate,
     db: Session = Depends(get_db),
 ):
     """
     Endpoint para cadastro de uma nova cooperativa.
     """
-    usuario_existente = db.query(Usuario).filter(Usuario.email == payload.get("email")).first()
+    usuario_existente = db.query(Usuario).filter(Usuario.email == payload.email).first()
     if usuario_existente:
         raise HTTPException(status_code=400, detail="Email já cadastrado")
 
     nova_cooperativa = Usuario(
-        nome=payload.get("nome"),
-        email=payload.get("email"),
-        telefone=payload.get("telefone"),
-        senha_hash=hash_senha(payload.get("senha")),  # Certifique-se de que a senha seja
+        nome=payload.nome,
+        email=payload.email,
+        telefone=payload.telefone,
+        senha_hash=hash_senha(payload.senha),
         role="cooperativa",
     )
     db.add(nova_cooperativa)
