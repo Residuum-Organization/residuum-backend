@@ -87,7 +87,7 @@ def validar_acesso_operacional_ao_ponto(usuario: Usuario, ponto: PontoColeta | N
     if usuario.role == "admin":
         return ponto
 
-    if usuario.role == "ponto_coleta" and ponto.cooperativa_id == usuario.id:
+    if usuario.role == "cooperativa" and ponto.cooperativa_id == usuario.id:
         return ponto
 
     raise_forbidden("Permissão insuficiente para operar este ponto de coleta")

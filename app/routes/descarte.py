@@ -119,12 +119,12 @@ async def ver_historico_geral(
 @router.get("/pendentes")
 async def listar_descartes_pendentes(
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "ponto_coleta")),
+    usuario: Usuario = Depends(require_role("admin", "cooperativa")),
 ):
     """Lista o histórico de descartes do ponto de coleta."""
     query = db.query(Descarte)
 
-    if usuario.role == "ponto_coleta":
+    if usuario.role == "cooperativa":
         query = query.join(PontoColeta, Descarte.ponto_coleta_id == PontoColeta.id).filter(
             PontoColeta.cooperativa_id == usuario.id
         )
@@ -164,7 +164,7 @@ async def confirmar_descarte(
     id_descarte: int,
     obj_in: DescarteConfirmar,
     db: Session = Depends(get_db),
-    usuario_operador: Usuario = Depends(require_role("admin", "ponto_coleta"))
+    usuario_operador: Usuario = Depends(require_role("admin", "cooperativa"))
 ):
     """
     Confirma o descarte e calcula pontos (RF014).
