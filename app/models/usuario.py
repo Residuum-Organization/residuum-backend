@@ -38,5 +38,9 @@ class Usuario(Base):
     endereco = relationship("Endereco")
     pontuacoes = relationship("Pontuacao", back_populates="usuario")
     resgates_pontuacao = relationship("ResgatePontuacao", back_populates="usuario")
-    descartes = relationship("Descarte", back_populates="usuario")
+    descartes = relationship(
+        "Descarte",
+        back_populates="usuario",
+        foreign_keys="Descarte.usuario_id",
+    )
     inventarios = relationship("InventarioUsuario", back_populates="usuario")

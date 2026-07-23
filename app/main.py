@@ -8,6 +8,8 @@ from fastapi.responses import HTMLResponse
 from app.routes import admin, auth, campanha, cooperativa, descarte, endereco, ponto_coleta, inventario_usuario, notificacao, pontuacao, solicitacao_ponto_coleta, sorteio, usuario_metricas, voucher, agenda
 from app.core.decorators import public
 from app.core.security import require_auth_unless_public
+# Mantém o modelo histórico registrado sem expor novamente as rotas de QR Code.
+from app.models import qrcode_token as _qrcode_token  # noqa: F401
 
 app = FastAPI(
     title="Residuum API",
@@ -55,7 +57,7 @@ def painel_testes():
     Uma Single Page Application (SPA) com Tailwind CSS para testar:
     - Autenticação de usuários
     - Registro de descartes
-    - Simulação de GPS e QR Code
+    - Simulação de GPS
     - Confirmação de descartes pela cooperativa
     - Painel de auditoria com dados atualizados
     """
@@ -130,10 +132,6 @@ def painel_testes():
                     <button class="btn-danger flex-1" onclick="setarGPSLonge()">❌ GPS Longe (Inválido)</button>
                 </div>
                 <input type="text" id="descarteGPS" class="input-field" placeholder="Coordenadas (lat, lon)" value="-23.550520, -46.633309" readonly>
-
-                <label class="block font-bold mb-2">🎫 QR Code Token (Opcional):</label>
-                <input type="text" id="descarteQRCode" class="input-field" placeholder="Cole o token QR Code aqui">
-                <button class="btn-secondary w-full mb-3" onclick="gerarQRCodeMock()">🔄 Gerar QR Code Mock</button>
 
                 <button class="btn-primary w-full" onclick="registrarDescarte()">🚀 Enviar Descarte</button>
             </div>
@@ -274,13 +272,6 @@ def painel_testes():
             mostrarAlerta('GPS definido para LOCAL DISTANTE (inválido)', 'error');
         }
 
-        // ============ QR CODE ============
-        function gerarQRCodeMock() {
-            const tokenMock = 'qr_' + Math.random().toString(36).substring(7);
-            document.getElementById('descarteQRCode').value = tokenMock;
-            mostrarAlerta('QR Code Mock gerado: ' + tokenMock, 'info');
-        }
-
         // ============ DESCARTE ============
         async function registrarDescarte() {
             if (!token) {
@@ -297,8 +288,7 @@ def painel_testes():
                 observacao: document.getElementById('descarteObservacao').value || 'Descarte via painel',
                 usuario_lat: lat,
                 usuario_long: lon,
-                ponto_coleta_id: parseInt(document.getElementById('pontoColeataId').value),
-                qrcode_token: document.getElementById('descarteQRCode').value || null
+                ponto_coleta_id: parseInt(document.getElementById('pontoColeataId').value)
             };
 
             try {

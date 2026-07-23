@@ -44,9 +44,6 @@ def transferir_residuo_para_ponto_coleta(
     # força o SQLAlchemy a reconhecer alteração no campo JSON
     flag_modified(ponto, "inventario")
 
-    db.commit()
-    db.refresh(ponto)
-
     return {
         "tipo_residuo": tipo_residuo,
         "quantidade_transferida": quantidade,
