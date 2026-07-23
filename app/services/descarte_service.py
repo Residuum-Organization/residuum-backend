@@ -7,6 +7,7 @@ from app.models.inventario_usuario import InventarioUsuario
 from app.models.usuario import Usuario
 from app.schemas.descarte import DescarteCreate, DescarteConfirmar
 from app.services.audit_service import registrar_acao
+from app.services.transferencia_lote_service import atualizar_status_transferencia_lote
 
 def registrar_novo_descarte(db: Session, descarte_data: DescarteCreate):
     novo_descarte = Descarte(**descarte_data.model_dump())
@@ -85,4 +86,5 @@ def rejeitar_descarte_pendente(
         motivo=motivo,
         payload={"status_anterior": status_anterior},
     )
+    atualizar_status_transferencia_lote(db, descarte.transferencia_lote_id)
     return descarte

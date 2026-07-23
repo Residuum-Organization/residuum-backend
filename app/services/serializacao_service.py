@@ -58,6 +58,8 @@ def serializar_inventario_item(item: InventarioUsuario) -> dict[str, Any]:
         "quantidade_disponivel": max(quantidade - quantidade_reservada, 0),
         "descricao": item.descricao,
         "observacao": item.observacao,
+        "codigo_barras": item.codigo_barras,
+        "sem_rotulo": bool(item.sem_rotulo),
         "status": item.status,
         "data_cadastro": item.data_cadastro,
         "data_atualizacao": item.data_atualizacao,
@@ -101,11 +103,18 @@ def serializar_descarte(descarte: Descarte, db: Session) -> dict[str, Any]:
         "ponto_coleta_endereco": ponto.endereco if ponto else None,
         "usuario_lat": descarte.usuario_lat,
         "usuario_long": descarte.usuario_long,
+        "usuario_precisao": descarte.usuario_precisao,
         "ponto_lat": descarte.ponto_lat,
         "ponto_long": descarte.ponto_long,
-        "qrcode_token_id": descarte.qrcode_token_id,
         "inventario_usuario_id": descarte.inventario_usuario_id,
         "inventario_item_descricao": item_inventario.descricao if item_inventario else None,
+        "inventario_sem_rotulo": bool(item_inventario.sem_rotulo) if item_inventario else None,
+        "possui_codigo_barras": bool(item_inventario.codigo_barras) if item_inventario else None,
+        "codigo_barras_validado": descarte.codigo_barras_validado,
+        "sem_rotulo_validado": bool(descarte.sem_rotulo_validado),
+        "identificacao_manual": descarte.identificacao_manual,
+        "identificado_em": descarte.identificado_em,
+        "transferencia_lote_id": descarte.transferencia_lote_id,
     }
 
 
