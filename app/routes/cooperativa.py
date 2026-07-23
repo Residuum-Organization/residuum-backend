@@ -16,12 +16,41 @@ from app.schemas.solicitacao_coleta import (
     SolicitacaoColetaConcluir,
 )
 from app.services.descarte_service import rejeitar_descarte_pendente
-
+from app.core.decorators import public
+from app.schemas.usuario import CooperativaCreate
+from app.services.password_service import hash_senha
 
 router = APIRouter(
     prefix="/cooperativa",
     tags=["Cooperativa"],
 )
+
+@router.post("/cadastro-cooperativa", status_code=status.HTTP_201_CREATED)
+@public
+def cadastrar_cooperativa(
+    payload: CooperativaCreate,
+    db: Session = Depends(get_db),
+):
+    """
+    Endpoint para cadastro de uma nova cooperativa.
+    """
+    usuario_existente = db.query(Usuario).filter(Usuario.email == payload.email).first()
+    if usuario_existente:
+        raise HTTPException(status_code=400, detail="Email já cadastrado")
+
+    nova_cooperativa = Usuario(
+        nome=payload.nome,
+        email=payload.email,
+        telefone=payload.telefone,
+        senha_hash=hash_senha(payload.senha),
+        role="cooperativa",
+    )
+    db.add(nova_cooperativa)
+    db.commit()
+    db.refresh(nova_cooperativa)
+
+    return {"id": nova_cooperativa.id, "nome": nova_cooperativa.nome, "email": nova_cooperativa.email, "msg" : "Cooperativa cadastrada com sucesso"}
+
 
 
 @router.get("/solicitacoes-coleta", response_model=list[SolicitacaoColetaResponse])

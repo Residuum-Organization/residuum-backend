@@ -21,3 +21,11 @@ class UsuarioUpdate(BaseModel):
     nome: str | None = Field(default=None, min_length=2)
     email: EmailStr | None = None
     telefone: str | None = Field(default=None, min_length=8)
+
+class CooperativaCreate(BaseModel):
+    """Modelo para criacao de uma nova cooperativa."""
+
+    nome: str = Field(..., min_length=2, description="Nome da cooperativa")
+    email: EmailStr = Field(..., description="Email deve ser um endereço de email válido")
+    telefone: str = Field(..., min_length=8, description="Telefone deve ter no mínimo 8 caracteres")
+    senha: str = Field(..., min_length=6, description="Senha deve ter no mínimo 6 caracteres")
