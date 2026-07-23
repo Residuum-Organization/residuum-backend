@@ -263,10 +263,7 @@ def comprar_bilhete(
 
     # Critério de participação: descarte validado por presença (GPS).
     if not _usuario_validou_descarte_por_gps(usuario.id, db):
-        raise_bad_request(
-            "Você precisa ter um descarte confirmado com validação por presença (GPS) para participar."
-        )
-
+        raise_bad_request("Você precisa ter um descarte confirmado com validação por presença (GPS) para participar.")
     # Regra: somente 1 bilhete por usuário por sorteio.
     ja_possui = (
         db.query(BilheteSorteio.id)
