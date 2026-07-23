@@ -11,6 +11,7 @@ from app.dependencies.auth import get_current_user
 from app.models.descarte import Descarte
 from app.models.inventario_usuario import InventarioUsuario
 from app.models.ponto_coleta import PontoColeta
+from app.models.pontuacao import Pontuacao
 from app.models.transferencia_lote import TransferenciaLote
 from app.models.usuario import Usuario
 from app.schemas.descarte import DescarteResponse
@@ -229,23 +230,29 @@ def transferir_itens_em_lote(
         usuario_lat=obj_in.usuario_lat,
         usuario_long=obj_in.usuario_long,
         usuario_precisao=obj_in.usuario_precisao,
-        status="pendente",
+        status="confirmado",
         total_itens=len(obj_in.itens),
         peso_total=peso_total,
         pontos_estimados=calcular_pontos_proporcionais(peso_total, peso_total),
     )
     db.add(lote)
 
+    pontos_totais_ganhos = lote.pontos_estimados
+    if pontos_totais_ganhos > 0:
+        usuario.pontuacao_total = (usuario.pontuacao_total or 0) + pontos_totais_ganhos
+        db.add(Pontuacao(pontos=pontos_totais_ganhos, usuario_id=usuario.id))
+
     for entrada in obj_in.itens:
         item = itens_por_id[entrada.item_id]
-        item.quantidade_reservada = float(item.quantidade_reservada or 0) + float(entrada.quantidade)
+        item.quantidade = max(float(item.quantidade or 0) - float(entrada.quantidade), 0.0)
         _recalcular_status(item)
         db.add(
             Descarte(
                 quantidade=entrada.quantidade,
+                quantidade_confirmada=entrada.quantidade,
                 tipo_residuo=item.tipo_residuo,
                 observacao=obj_in.observacao,
-                status="pendente",
+                status="confirmado",
                 usuario_id=usuario.id,
                 usuario_lat=obj_in.usuario_lat,
                 usuario_long=obj_in.usuario_long,
@@ -255,6 +262,7 @@ def transferir_itens_em_lote(
                 ponto_coleta_id=ponto.id,
                 inventario_usuario_id=item.id,
                 transferencia_lote_id=lote.id,
+                identificado_em=datetime.now(timezone.utc) if hasattr(datetime, 'now') else None,
             )
         )
 
@@ -419,9 +427,10 @@ def descartar_item_inventario(
     validar_residuo_aceito_no_ponto(ponto, item.tipo_residuo)
     novo_descarte = Descarte(
         quantidade=obj_in.quantidade,
+        quantidade_confirmada=obj_in.quantidade,
         tipo_residuo=item.tipo_residuo,
         observacao=obj_in.observacao,
-        status="pendente",
+        status="confirmado",
         usuario_id=usuario.id,
         usuario_lat=obj_in.usuario_lat,
         usuario_long=obj_in.usuario_long,
@@ -431,7 +440,13 @@ def descartar_item_inventario(
         ponto_coleta_id=ponto.id,
         inventario_usuario_id=item.id,
     )
-    item.quantidade_reservada = float(item.quantidade_reservada or 0) + float(obj_in.quantidade)
+    
+    pontos = calcular_pontos_proporcionais(obj_in.quantidade, obj_in.quantidade)
+    if pontos > 0:
+        usuario.pontuacao_total = (usuario.pontuacao_total or 0) + pontos
+        db.add(Pontuacao(pontos=pontos, usuario_id=usuario.id))
+        
+    item.quantidade = max(float(item.quantidade or 0) - float(obj_in.quantidade), 0.0)
     _recalcular_status(item)
 
     db.add(novo_descarte)
