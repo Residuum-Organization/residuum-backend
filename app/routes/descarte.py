@@ -69,9 +69,10 @@ async def registrar_descarte(
 
     novo_descarte = Descarte(
         quantidade=obj_in.quantidade,
+        quantidade_confirmada=obj_in.quantidade,
         tipo_residuo=tipo_residuo,
         observacao=obj_in.observacao,
-        status="pendente",
+        status="confirmado",
         usuario_id=usuario_bd.id,
         usuario_lat=obj_in.usuario_lat,
         usuario_long=obj_in.usuario_long,
@@ -79,7 +80,13 @@ async def registrar_descarte(
         ponto_lat=ponto.latitude,
         ponto_long=ponto.longitude,
         ponto_coleta_id=ponto.id,
+        identificado_em=datetime.now(timezone.utc),
     )
+    
+    pontos = calcular_pontos_proporcionais(obj_in.quantidade, obj_in.quantidade)
+    if pontos > 0:
+        usuario_bd.pontuacao_total = (usuario_bd.pontuacao_total or 0) + pontos
+        db.add(Pontuacao(pontos=pontos, usuario_id=usuario_bd.id))
     db.add(novo_descarte)
     db.commit()
     db.refresh(novo_descarte)
@@ -114,8 +121,8 @@ async def listar_descartes_pendentes(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(require_role("admin", "ponto_coleta")),
 ):
-    """Lista descartes pendentes para confirmação pelo admin ou ponto de coleta."""
-    query = db.query(Descarte).filter(Descarte.status == 'pendente')
+    """Lista o histórico de descartes do ponto de coleta."""
+    query = db.query(Descarte)
 
     if usuario.role == "ponto_coleta":
         query = query.join(PontoColeta, Descarte.ponto_coleta_id == PontoColeta.id).filter(
