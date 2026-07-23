@@ -10,7 +10,11 @@ from app.models.ponto_coleta import PontoColeta
 from app.models.solicitacao_coleta import SolicitacaoColeta
 from app.models.usuario import Usuario
 from app.schemas.admin import RejeitarDescarteRequest
-from app.schemas.solicitacao_coleta import SolicitacaoColetaRecusar, SolicitacaoColetaResponse
+from app.schemas.solicitacao_coleta import (
+    SolicitacaoColetaRecusar,
+    SolicitacaoColetaResponse,
+    SolicitacaoColetaConcluir,
+)
 from app.services.descarte_service import rejeitar_descarte_pendente
 
 
@@ -69,10 +73,11 @@ def aceitar_solicitacao_coleta(
 )
 def concluir_solicitacao_coleta(
     solicitacao_id: int,
+    payload: SolicitacaoColetaConcluir,
     db: Session = Depends(get_db),
     cooperativa: Usuario = Depends(require_role("cooperativa")),
 ):
-    """Conclui a retirada integral do inventário capturado na solicitação."""
+    """Conclui a retirada integral do inventário capturado na solicitação, recebendo o peso real."""
     solicitacao = (
         db.query(SolicitacaoColeta)
         .filter(
@@ -89,23 +94,17 @@ def concluir_solicitacao_coleta(
     ponto = solicitacao.ponto_coleta
     inventario_atual = dict(ponto.inventario or {})
     inventario_solicitado = solicitacao.inventario_solicitado or {}
-    quantidade_coletada = 0.0
+    
+    quantidade_coletada = sum(max(float(peso), 0.0) for peso in payload.pesos_reais.values())
 
-    for tipo_residuo, quantidade_solicitada in inventario_solicitado.items():
-        quantidade_solicitada = max(float(quantidade_solicitada or 0), 0.0)
-        quantidade_disponivel = max(float(inventario_atual.get(tipo_residuo, 0) or 0), 0.0)
-        quantidade_retirada = min(quantidade_solicitada, quantidade_disponivel)
-        saldo = quantidade_disponivel - quantidade_retirada
-        quantidade_coletada += quantidade_retirada
-
-        if saldo > 0:
-            inventario_atual[tipo_residuo] = saldo
-        else:
-            inventario_atual.pop(tipo_residuo, None)
+    # Zera as unidades do Ponto de Coleta referentes ao material coletado
+    for tipo_residuo in inventario_solicitado.keys():
+        inventario_atual.pop(tipo_residuo, None)
 
     ponto.inventario = inventario_atual
     ponto.status = "ativo"
     solicitacao.quantidade_coletada = quantidade_coletada
+    solicitacao.pesos_reais = payload.pesos_reais
     solicitacao.status = "concluida"
     solicitacao.data_conclusao = datetime.utcnow()
     db.commit()
