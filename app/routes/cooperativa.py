@@ -1,12 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies.auth import require_role, validar_acesso_operacional_ao_ponto
 from app.models.descarte import Descarte
 from app.models.ponto_coleta import PontoColeta
+from app.models.solicitacao_coleta import SolicitacaoColeta
 from app.models.usuario import Usuario
 from app.schemas.admin import RejeitarDescarteRequest
+from app.schemas.solicitacao_coleta import SolicitacaoColetaRecusar, SolicitacaoColetaResponse
 from app.services.descarte_service import rejeitar_descarte_pendente
 
 
@@ -16,15 +20,138 @@ router = APIRouter(
 )
 
 
-@router.get("/pontos-coleta")
-def listar_pontos_da_cooperativa(
+@router.get("/solicitacoes-coleta", response_model=list[SolicitacaoColetaResponse])
+def listar_solicitacoes_coleta(
     db: Session = Depends(get_db),
     cooperativa: Usuario = Depends(require_role("cooperativa")),
 ):
-    """Lista somente os pontos sob responsabilidade da conta operacional."""
+    """Lista solicitações encaminhadas à cooperativa autenticada."""
+    return (
+        db.query(SolicitacaoColeta)
+        .filter(SolicitacaoColeta.cooperativa_id == cooperativa.id)
+        .order_by(SolicitacaoColeta.data_solicitacao.desc())
+        .all()
+    )
+
+
+@router.post(
+    "/solicitacoes-coleta/{solicitacao_id}/aceitar",
+    response_model=SolicitacaoColetaResponse,
+)
+def aceitar_solicitacao_coleta(
+    solicitacao_id: int,
+    db: Session = Depends(get_db),
+    cooperativa: Usuario = Depends(require_role("cooperativa")),
+):
+    solicitacao = (
+        db.query(SolicitacaoColeta)
+        .filter(
+            SolicitacaoColeta.id == solicitacao_id,
+            SolicitacaoColeta.cooperativa_id == cooperativa.id,
+        )
+        .first()
+    )
+    if not solicitacao:
+        raise HTTPException(status_code=404, detail="Solicitação de coleta não encontrada")
+    if solicitacao.status != "solicitada":
+        raise HTTPException(status_code=409, detail="A solicitação não está disponível para aceite")
+
+    solicitacao.status = "aceita"
+    solicitacao.data_aceite = datetime.utcnow()
+    db.commit()
+    db.refresh(solicitacao)
+    return solicitacao
+
+
+@router.post(
+    "/solicitacoes-coleta/{solicitacao_id}/concluir",
+    response_model=SolicitacaoColetaResponse,
+)
+def concluir_solicitacao_coleta(
+    solicitacao_id: int,
+    db: Session = Depends(get_db),
+    cooperativa: Usuario = Depends(require_role("cooperativa")),
+):
+    """Conclui a retirada integral do inventário capturado na solicitação."""
+    solicitacao = (
+        db.query(SolicitacaoColeta)
+        .filter(
+            SolicitacaoColeta.id == solicitacao_id,
+            SolicitacaoColeta.cooperativa_id == cooperativa.id,
+        )
+        .first()
+    )
+    if not solicitacao:
+        raise HTTPException(status_code=404, detail="Solicitação de coleta não encontrada")
+    if solicitacao.status != "aceita":
+        raise HTTPException(status_code=409, detail="A solicitação precisa ser aceita antes da conclusão")
+
+    ponto = solicitacao.ponto_coleta
+    inventario_atual = dict(ponto.inventario or {})
+    inventario_solicitado = solicitacao.inventario_solicitado or {}
+    quantidade_coletada = 0.0
+
+    for tipo_residuo, quantidade_solicitada in inventario_solicitado.items():
+        quantidade_solicitada = max(float(quantidade_solicitada or 0), 0.0)
+        quantidade_disponivel = max(float(inventario_atual.get(tipo_residuo, 0) or 0), 0.0)
+        quantidade_retirada = min(quantidade_solicitada, quantidade_disponivel)
+        saldo = quantidade_disponivel - quantidade_retirada
+        quantidade_coletada += quantidade_retirada
+
+        if saldo > 0:
+            inventario_atual[tipo_residuo] = saldo
+        else:
+            inventario_atual.pop(tipo_residuo, None)
+
+    ponto.inventario = inventario_atual
+    ponto.status = "ativo"
+    solicitacao.quantidade_coletada = quantidade_coletada
+    solicitacao.status = "concluida"
+    solicitacao.data_conclusao = datetime.utcnow()
+    db.commit()
+    db.refresh(solicitacao)
+    return solicitacao
+
+
+@router.post(
+    "/solicitacoes-coleta/{solicitacao_id}/recusar",
+    response_model=SolicitacaoColetaResponse,
+)
+def recusar_solicitacao_coleta(
+    solicitacao_id: int,
+    payload: SolicitacaoColetaRecusar,
+    db: Session = Depends(get_db),
+    cooperativa: Usuario = Depends(require_role("cooperativa")),
+):
+    solicitacao = (
+        db.query(SolicitacaoColeta)
+        .filter(
+            SolicitacaoColeta.id == solicitacao_id,
+            SolicitacaoColeta.cooperativa_id == cooperativa.id,
+        )
+        .first()
+    )
+    if not solicitacao:
+        raise HTTPException(status_code=404, detail="Solicitação de coleta não encontrada")
+    if solicitacao.status != "solicitada":
+        raise HTTPException(status_code=409, detail="A solicitação não está disponível para recusa")
+
+    solicitacao.status = "recusada"
+    solicitacao.motivo_recusa = payload.motivo
+    db.commit()
+    db.refresh(solicitacao)
+    return solicitacao
+
+
+@router.get("/pontos-coleta")
+def listar_pontos_da_cooperativa(
+    db: Session = Depends(get_db),
+    ponto_coleta: Usuario = Depends(require_role("ponto_coleta")),
+):
+    """Lista o ponto vinculado à conta de ponto de coleta autenticada."""
     pontos = (
         db.query(PontoColeta)
-        .filter(PontoColeta.cooperativa_id == cooperativa.id)
+        .filter(PontoColeta.cooperativa_id == ponto_coleta.id)
         .order_by(PontoColeta.nome)
         .all()
     )
@@ -51,7 +178,7 @@ def rejeitar_descarte_cooperativa(
     id_descarte: int,
     payload: RejeitarDescarteRequest,
     db: Session = Depends(get_db),
-    cooperativa: Usuario = Depends(require_role("cooperativa")),
+    ponto_coleta: Usuario = Depends(require_role("ponto_coleta")),
 ):
     """Rejeita descarte pendente vinculado a ponto da cooperativa autenticada."""
     descarte = (
@@ -60,8 +187,8 @@ def rejeitar_descarte_cooperativa(
     if not descarte:
         raise HTTPException(status_code=404, detail="Descarte nao encontrado")
 
-    validar_acesso_operacional_ao_ponto(cooperativa, descarte.ponto_coleta)
-    rejeitar_descarte_pendente(db, descarte, cooperativa, payload.motivo)
+    validar_acesso_operacional_ao_ponto(ponto_coleta, descarte.ponto_coleta)
+    rejeitar_descarte_pendente(db, descarte, ponto_coleta, payload.motivo)
 
     db.commit()
     db.refresh(descarte)

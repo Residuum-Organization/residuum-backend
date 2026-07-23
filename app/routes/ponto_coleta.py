@@ -47,17 +47,17 @@ router = APIRouter(tags=["Ponto de Coleta"])
 STATUS_VALIDOS = {"ativo", "cheio", "inativo"}
 
 
-def _validar_cooperativa_designada(db: Session, cooperativa_id: Optional[int]) -> Optional[Usuario]:
+def _validar_conta_ponto_designada(db: Session, cooperativa_id: Optional[int]) -> Optional[Usuario]:
     if cooperativa_id is None:
         return None
 
-    cooperativa = db.query(Usuario).filter(Usuario.id == cooperativa_id).first()
-    if not cooperativa:
-        raise_bad_request("Cooperativa responsável não encontrada.")
-    if cooperativa.role != "cooperativa":
-        raise_bad_request("Usuário informado não possui role cooperativa.")
+    conta_ponto = db.query(Usuario).filter(Usuario.id == cooperativa_id).first()
+    if not conta_ponto:
+        raise_bad_request("Conta do ponto de coleta não encontrada.")
+    if conta_ponto.role != "ponto_coleta":
+        raise_bad_request("Usuário informado não possui role ponto_coleta.")
 
-    return cooperativa
+    return conta_ponto
 
 
 def _normalizar_tipos(tipos: Optional[List[str]]) -> List[str]:
@@ -108,7 +108,7 @@ async def criar_ponto_coleta(
     if status not in STATUS_VALIDOS:
         raise_bad_request("Status inválido. Use: ativo, cheio ou inativo.")
 
-    cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
+    conta_ponto = _validar_conta_ponto_designada(db, obj_in.cooperativa_id)
     latitude = obj_in.latitude
     longitude = obj_in.longitude
     if (latitude == 0.0 and longitude == 0.0) and obj_in.endereco:
@@ -128,7 +128,7 @@ async def criar_ponto_coleta(
         horario_funcionamento=obj_in.horario_funcionamento,
         status=status,
         ativo=0 if status == "inativo" else 1,
-        cooperativa_id=cooperativa.id if cooperativa else None,
+        cooperativa_id=conta_ponto.id if conta_ponto else None,
         inventario={},
         data_final=obj_in.data_final
     )
@@ -146,7 +146,7 @@ async def criar_ponto_coleta(
 async def obter_dashboard_ponto_coleta(
     ponto_id: int,
     db: Session = Depends(get_db),
-    usuario_atual: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario_atual: Usuario = Depends(require_role("admin", "ponto_coleta")),
 ):
     """Retorna dados consolidados para dashboard operacional do ponto de coleta."""
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
@@ -164,7 +164,7 @@ async def obter_ponto_coleta(
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
     if not ponto:
         raise_not_found("Ponto de coleta não encontrado.")
-    if usuario_atual.role == "cooperativa":
+    if usuario_atual.role == "ponto_coleta":
         validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
     return _serializar_ponto(ponto)
 
@@ -189,12 +189,12 @@ async def listar_pontos_coleta(
     """
     # Usuários comuns só enxergam pontos disponíveis.
     # Admin e cooperativa podem solicitar incluir_inativos dentro do próprio escopo.
-    if incluir_inativos and usuario_atual.role not in {"admin", "cooperativa"}:
+    if incluir_inativos and usuario_atual.role not in {"admin", "ponto_coleta"}:
         incluir_inativos = False
 
     query = db.query(PontoColeta)
 
-    if usuario_atual.role == "cooperativa":
+    if usuario_atual.role == "ponto_coleta":
         query = query.filter(PontoColeta.cooperativa_id == usuario_atual.id)
 
     if not incluir_inativos:
@@ -306,8 +306,8 @@ async def atualizar_ponto_coleta(
     if "cooperativa_id" in obj_in.model_fields_set:
         if usuario_atual.role != "admin":
             raise HTTPException(status_code=403, detail="Somente o administrador pode trocar o responsavel pelo ponto.")
-        cooperativa = _validar_cooperativa_designada(db, obj_in.cooperativa_id)
-        ponto.cooperativa_id = cooperativa.id if cooperativa else None
+        conta_ponto = _validar_conta_ponto_designada(db, obj_in.cooperativa_id)
+        ponto.cooperativa_id = conta_ponto.id if conta_ponto else None
 
     db.commit()
     db.refresh(ponto)

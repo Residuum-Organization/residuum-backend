@@ -67,5 +67,6 @@ class PontoColeta(Base):
     # Relationships
     cooperativa_responsavel = relationship("Usuario", foreign_keys=[cooperativa_id])
     descartes = relationship("Descarte", back_populates="ponto_coleta")
+    solicitacoes_coleta = relationship("SolicitacaoColeta", back_populates="ponto_coleta")
     qrcode_tokens = relationship("QRCodeToken", back_populates="ponto_coleta")
     horarios = relationship("HorarioDisponibilidade", back_populates="ponto_coleta")

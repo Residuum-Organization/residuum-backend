@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class UpdateRoleRequest(BaseModel):
-    role: Literal["usuario", "cooperativa", "admin"]
+    role: Literal["usuario", "ponto_coleta", "cooperativa", "admin"]
 
 
 class AjustePontuacaoRequest(BaseModel):

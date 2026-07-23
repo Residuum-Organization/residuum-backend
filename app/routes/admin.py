@@ -26,6 +26,7 @@ from app.models.descarte import Descarte
 from app.models.ponto_coleta import PontoColeta
 from app.models.pontuacao import Pontuacao
 from app.models.solicitacao_ponto_coleta import SolicitacaoPontoColeta
+from app.models.solicitacao_coleta import SolicitacaoColeta
 from app.models.usuario import Usuario
 from app.schemas.admin import (
     AjustePontuacaoRequest,
@@ -44,6 +45,8 @@ from app.services.serializacao_service import (
 from app.services.descarte_service import rejeitar_descarte_pendente
 from app.services.transferencia_service import debitar_residuo_do_ponto_coleta
 from app.services.localizacao_service import obter_coordenadas
+from app.services.dashboard_ponto_coleta_service import montar_dashboard_ponto_coleta
+from app.schemas.solicitacao_coleta import SolicitacaoColetaCreate, SolicitacaoColetaResponse
 
 
 router = APIRouter(
@@ -51,6 +54,78 @@ router = APIRouter(
     tags=["Admin"],
     dependencies=[Depends(require_role("admin"))],
 )
+
+
+@router.get("/pontos-coleta/alertas")
+def listar_pontos_para_coleta(
+    limiar: float = Query(80.0, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Lista pontos ativos cuja ocupação atingiu o limiar informado."""
+    pontos = db.query(PontoColeta).filter(PontoColeta.ativo == 1).all()
+    itens = []
+    for ponto in pontos:
+        dashboard = montar_dashboard_ponto_coleta(db, ponto)
+        if dashboard["percentual_ocupacao"] >= limiar:
+            itens.append(dashboard)
+    return {"limiar": limiar, "total": len(itens), "itens": itens}
+
+
+@router.post(
+    "/pontos-coleta/{ponto_id}/solicitacoes-coleta",
+    response_model=SolicitacaoColetaResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def solicitar_coleta(
+    ponto_id: int,
+    payload: SolicitacaoColetaCreate,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Solicita a uma cooperativa a retirada do material de um ponto."""
+    ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
+    if not ponto:
+        raise HTTPException(status_code=404, detail="Ponto de coleta não encontrado")
+
+    cooperativa = db.query(Usuario).filter(Usuario.id == payload.cooperativa_id).first()
+    if not cooperativa or cooperativa.role != "cooperativa":
+        raise_bad_request("A cooperativa informada não existe ou não possui role cooperativa.")
+
+    ativa = (
+        db.query(SolicitacaoColeta)
+        .filter(
+            SolicitacaoColeta.ponto_coleta_id == ponto_id,
+            SolicitacaoColeta.status.in_(["solicitada", "aceita"]),
+        )
+        .first()
+    )
+    if ativa:
+        raise_bad_request("Já existe uma solicitação de coleta ativa para este ponto.")
+
+    dashboard = montar_dashboard_ponto_coleta(db, ponto)
+
+    solicitacao = SolicitacaoColeta(
+        admin_id=admin.id,
+        cooperativa_id=cooperativa.id,
+        ponto_coleta_id=ponto.id,
+        percentual_ocupacao=dashboard["percentual_ocupacao"],
+        quantidade_inventario=dashboard["quantidade_total"],
+        inventario_solicitado=dict(ponto.inventario or {}),
+        capacidade_maxima=ponto.capacidade_maxima,
+        observacao=payload.observacao,
+    )
+    db.add(solicitacao)
+    registrar_acao(
+        db,
+        admin_id=admin.id,
+        action="solicitacao_coleta_criada",
+        target_type="solicitacao_coleta",
+        target_id=ponto.id,
+        payload={"cooperativa_id": cooperativa.id, "percentual_ocupacao": dashboard["percentual_ocupacao"]},
+    )
+    db.commit()
+    db.refresh(solicitacao)
+    return solicitacao
 
 
 # ============================================================
@@ -177,7 +252,7 @@ def alterar_role(
             detail="Você não pode remover seu próprio role de admin",
         )
 
-    if usuario.role == "cooperativa" and payload.role != "cooperativa":
+    if usuario.role in {"cooperativa", "ponto_coleta"} and payload.role != usuario.role:
         possui_pontos_vinculados = db.query(PontoColeta.id).filter(PontoColeta.cooperativa_id == usuario.id).first()
         if possui_pontos_vinculados:
             raise_bad_request("Reatribua os pontos de coleta desta cooperativa antes de alterar o role.")
@@ -539,7 +614,7 @@ def aprovar_solicitacao_ponto_coleta(
     """Aprova uma solicitação pendente.
 
     Ao aprovar: altera o status para `aprovada`, cria o ponto de coleta real
-    com status `ativo` e promove o usuário solicitante para o role `cooperativa`.
+    com status `ativo` e promove o usuário solicitante para o role `ponto_coleta`.
     """
     solicitacao = (
         db.query(SolicitacaoPontoColeta)
@@ -561,7 +636,7 @@ def aprovar_solicitacao_ponto_coleta(
             raise HTTPException(status_code=404, detail="Usuário solicitante não encontrado")
         role_anterior = solicitante.role
         if solicitante.role != "admin":
-            solicitante.role = "cooperativa"
+            solicitante.role = "ponto_coleta"
     else:
         if db.query(Usuario.id).filter(Usuario.email == solicitacao.email).first():
             raise_bad_request(
@@ -578,7 +653,7 @@ def aprovar_solicitacao_ponto_coleta(
             email=solicitacao.email,
             telefone=solicitacao.responsavel_telefone,
             senha_hash=solicitacao.senha_hash,
-            role="cooperativa",
+            role="ponto_coleta",
             pontuacao_total=0,
         )
         db.add(solicitante)

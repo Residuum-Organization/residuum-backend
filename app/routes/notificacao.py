@@ -19,14 +19,14 @@ router = APIRouter(prefix="/notificacoes", tags=["Notificações"])
 def listar_notificacoes_nao_lidas(
     ponto_id: Optional[int] = Query(None, description="Filtrar por ID do Ponto de Coleta"),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario: Usuario = Depends(require_role("admin", "ponto_coleta")),
 ):
     if ponto_id is not None:
         ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
         validar_acesso_operacional_ao_ponto(usuario, ponto)
 
     query = db.query(Notificacao).filter(Notificacao.lida.is_(False))
-    if usuario.role == "cooperativa":
+    if usuario.role == "ponto_coleta":
         query = query.join(PontoColeta, Notificacao.ponto_coleta_id == PontoColeta.id).filter(
             PontoColeta.cooperativa_id == usuario.id
         )
@@ -40,7 +40,7 @@ def listar_notificacoes_nao_lidas(
 def marcar_como_lida(
     notificacao_id: int,
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario: Usuario = Depends(require_role("admin", "ponto_coleta")),
 ):
     """
     Marca um alerta como lido para que ele suma do painel.
@@ -50,7 +50,7 @@ def marcar_como_lida(
     if not notificacao:
         raise_not_found("Notificação não encontrada.")
 
-    if usuario.role == "cooperativa":
+    if usuario.role == "ponto_coleta":
         ponto = db.query(PontoColeta).filter(PontoColeta.id == notificacao.ponto_coleta_id).first()
         validar_acesso_operacional_ao_ponto(usuario, ponto)
 

@@ -35,6 +35,8 @@ import app.models.bilhete_sorteio # noqa: F401, E402
 import app.models.campanha # noqa: F401, E402
 import app.models.audit_log # noqa: F401, E402
 import app.models.agenda # noqa: F401, E402
+import app.models.solicitacao_coleta # noqa: F401, E402
+import app.models.cooperativa # noqa: F401, E402
 import app.models.transferencia_lote # noqa: F401, E402
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
