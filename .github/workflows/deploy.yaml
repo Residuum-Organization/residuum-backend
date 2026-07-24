@@ -22,7 +22,7 @@ jobs:
       - name: Run Alembic migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: alembic upgrade head
+        run: alembic upgrade heads
 
       - name: Trigger Vercel Deploy Hook
         run: curl -X POST "${{ secrets.VERCEL_DEPLOY_HOOK_URL }}"
