@@ -1,6 +1,7 @@
 """Rotas do inventário pessoal e transferências para pontos de coleta."""
 
 from uuid import uuid4
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
