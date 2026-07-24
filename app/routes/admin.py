@@ -252,7 +252,7 @@ def alterar_role(
             detail="Você não pode remover seu próprio role de admin",
         )
 
-    if usuario.role in {"cooperativa", "ponto_coleta"} and payload.role != usuario.role:
+    if usuario.role == "cooperativa" and payload.role != usuario.role:
         possui_pontos_vinculados = db.query(PontoColeta.id).filter(PontoColeta.cooperativa_id == usuario.id).first()
         if possui_pontos_vinculados:
             raise_bad_request("Reatribua os pontos de coleta desta cooperativa antes de alterar o role.")
@@ -526,7 +526,7 @@ def desativar_ponto_coleta(
         db,
         admin_id=admin.id,
         action="ponto_coleta.desativar",
-        target_type="ponto_coleta",
+        target_type="cooperativa",
         target_id=ponto.id,
         payload={"nome": ponto.nome},
     )
@@ -653,7 +653,7 @@ def aprovar_solicitacao_ponto_coleta(
             email=solicitacao.email,
             telefone=solicitacao.responsavel_telefone,
             senha_hash=solicitacao.senha_hash,
-            role="ponto_coleta",
+            role="cooperativa",
             pontuacao_total=0,
         )
         db.add(solicitante)

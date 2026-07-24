@@ -10,35 +10,81 @@ from app.models.ponto_coleta import PontoColeta
 from app.models.solicitacao_coleta import SolicitacaoColeta
 from app.models.usuario import Usuario
 from app.schemas.admin import RejeitarDescarteRequest
-from app.schemas.solicitacao_coleta import SolicitacaoColetaRecusar, SolicitacaoColetaResponse
+from app.schemas.solicitacao_coleta import (
+    SolicitacaoColetaRecusar,
+    SolicitacaoColetaResponse,
+    SolicitacaoColetaConcluir,
+)
 from app.services.descarte_service import rejeitar_descarte_pendente
 from app.core.decorators import public
-
+from app.schemas.usuario import CooperativaCreate
 from app.services.password_service import hash_senha
+from pydantic import BaseModel
 
 router = APIRouter(
     prefix="/cooperativa",
     tags=["Cooperativa"],
 )
 
+class LancamentoAvulsoRequest(BaseModel):
+    ponto_coleta_id: int
+    material: str
+    peso_kg: float
+
+@router.post("/lancamento-avulso")
+def lancamento_avulso(
+    payload: LancamentoAvulsoRequest,
+    db: Session = Depends(get_db),
+    cooperativa: Usuario = Depends(require_role("cooperativa")),
+):
+    """Lança o peso coletado de forma direta, abatendo o inventário do ponto."""
+    ponto = db.query(PontoColeta).filter(
+        PontoColeta.id == payload.ponto_coleta_id,
+        PontoColeta.cooperativa_id == cooperativa.id
+    ).first()
+
+    if not ponto:
+        raise HTTPException(status_code=404, detail="Ponto de coleta não encontrado ou não pertence a esta cooperativa")
+
+    inventario_atual = dict(ponto.inventario or {})
+    unidades = inventario_atual.pop(payload.material, 0)
+    ponto.inventario = inventario_atual
+
+    # Criamos um registro na SolicitacaoColeta para constar nos relatórios do sistema
+    solicitacao = SolicitacaoColeta(
+        admin_id=cooperativa.id, # usando a propria cooperativa como admin requester por simplicidade
+        cooperativa_id=cooperativa.id,
+        ponto_coleta_id=ponto.id,
+        status="concluida",
+        quantidade_inventario=float(unidades),
+        inventario_solicitado={payload.material: unidades},
+        quantidade_coletada=payload.peso_kg,
+        pesos_reais={payload.material: payload.peso_kg},
+        data_aceite=datetime.utcnow(),
+        data_conclusao=datetime.utcnow()
+    )
+    db.add(solicitacao)
+    db.commit()
+    return {"msg": "Lançamento registrado com sucesso", "unidades_abatidas": unidades}
+
 @router.post("/cadastro-cooperativa", status_code=status.HTTP_201_CREATED)
 @public
 def cadastrar_cooperativa(
-    payload: dict,
+    payload: CooperativaCreate,
     db: Session = Depends(get_db),
 ):
     """
     Endpoint para cadastro de uma nova cooperativa.
     """
-    usuario_existente = db.query(Usuario).filter(Usuario.email == payload.get("email")).first()
+    usuario_existente = db.query(Usuario).filter(Usuario.email == payload.email).first()
     if usuario_existente:
         raise HTTPException(status_code=400, detail="Email já cadastrado")
 
     nova_cooperativa = Usuario(
-        nome=payload.get("nome"),
-        email=payload.get("email"),
-        telefone=payload.get("telefone"),
-        senha_hash=hash_senha(payload.get("senha")),  # Certifique-se de que a senha seja
+        nome=payload.nome,
+        email=payload.email,
+        telefone=payload.telefone,
+        senha_hash=hash_senha(payload.senha),
         role="cooperativa",
     )
     db.add(nova_cooperativa)
@@ -98,10 +144,11 @@ def aceitar_solicitacao_coleta(
 )
 def concluir_solicitacao_coleta(
     solicitacao_id: int,
+    payload: SolicitacaoColetaConcluir,
     db: Session = Depends(get_db),
     cooperativa: Usuario = Depends(require_role("cooperativa")),
 ):
-    """Conclui a retirada integral do inventário capturado na solicitação."""
+    """Conclui a retirada integral do inventário capturado na solicitação, recebendo o peso real."""
     solicitacao = (
         db.query(SolicitacaoColeta)
         .filter(
@@ -118,23 +165,17 @@ def concluir_solicitacao_coleta(
     ponto = solicitacao.ponto_coleta
     inventario_atual = dict(ponto.inventario or {})
     inventario_solicitado = solicitacao.inventario_solicitado or {}
-    quantidade_coletada = 0.0
+    
+    quantidade_coletada = sum(max(float(peso), 0.0) for peso in payload.pesos_reais.values())
 
-    for tipo_residuo, quantidade_solicitada in inventario_solicitado.items():
-        quantidade_solicitada = max(float(quantidade_solicitada or 0), 0.0)
-        quantidade_disponivel = max(float(inventario_atual.get(tipo_residuo, 0) or 0), 0.0)
-        quantidade_retirada = min(quantidade_solicitada, quantidade_disponivel)
-        saldo = quantidade_disponivel - quantidade_retirada
-        quantidade_coletada += quantidade_retirada
-
-        if saldo > 0:
-            inventario_atual[tipo_residuo] = saldo
-        else:
-            inventario_atual.pop(tipo_residuo, None)
+    # Zera as unidades do Ponto de Coleta referentes ao material coletado
+    for tipo_residuo in inventario_solicitado.keys():
+        inventario_atual.pop(tipo_residuo, None)
 
     ponto.inventario = inventario_atual
     ponto.status = "ativo"
     solicitacao.quantidade_coletada = quantidade_coletada
+    solicitacao.pesos_reais = payload.pesos_reais
     solicitacao.status = "concluida"
     solicitacao.data_conclusao = datetime.utcnow()
     db.commit()
@@ -175,7 +216,7 @@ def recusar_solicitacao_coleta(
 @router.get("/pontos-coleta")
 def listar_pontos_da_cooperativa(
     db: Session = Depends(get_db),
-    ponto_coleta: Usuario = Depends(require_role("ponto_coleta")),
+    ponto_coleta: Usuario = Depends(require_role("cooperativa")),
 ):
     """Lista o ponto vinculado à conta de ponto de coleta autenticada."""
     pontos = (
@@ -197,6 +238,7 @@ def listar_pontos_da_cooperativa(
             "horario_funcionamento": ponto.horario_funcionamento,
             "status": ponto.status,
             "inventario": ponto.inventario or {},
+            "horarios": ponto.horarios if hasattr(ponto, 'horarios') else [],
         }
         for ponto in pontos
     ]
@@ -207,7 +249,7 @@ def rejeitar_descarte_cooperativa(
     id_descarte: int,
     payload: RejeitarDescarteRequest,
     db: Session = Depends(get_db),
-    ponto_coleta: Usuario = Depends(require_role("ponto_coleta")),
+    ponto_coleta: Usuario = Depends(require_role("cooperativa")),
 ):
     """Rejeita descarte pendente vinculado a ponto da cooperativa autenticada."""
     descarte = (

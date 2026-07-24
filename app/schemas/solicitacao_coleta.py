@@ -13,6 +13,10 @@ class SolicitacaoColetaRecusar(BaseModel):
     motivo: str = Field(..., min_length=1, max_length=500)
 
 
+class SolicitacaoColetaConcluir(BaseModel):
+    pesos_reais: Dict[str, float] = Field(..., description="Pesos reais (kg) coletados por material")
+
+
 class SolicitacaoColetaResponse(BaseModel):
     id: int
     admin_id: int
@@ -23,6 +27,7 @@ class SolicitacaoColetaResponse(BaseModel):
     quantidade_inventario: float
     inventario_solicitado: Dict[str, Any]
     quantidade_coletada: Optional[float] = None
+    pesos_reais: Optional[Dict[str, float]] = None
     capacidade_maxima: Optional[float] = None
     observacao: Optional[str] = None
     motivo_recusa: Optional[str] = None

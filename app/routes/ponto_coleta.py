@@ -54,7 +54,7 @@ def _validar_conta_ponto_designada(db: Session, cooperativa_id: Optional[int]) -
     conta_ponto = db.query(Usuario).filter(Usuario.id == cooperativa_id).first()
     if not conta_ponto:
         raise_bad_request("Conta do ponto de coleta não encontrada.")
-    if conta_ponto.role != "ponto_coleta":
+    if conta_ponto.role != "cooperativa":
         raise_bad_request("Usuário informado não possui role ponto_coleta.")
 
     return conta_ponto
@@ -146,7 +146,7 @@ async def criar_ponto_coleta(
 async def obter_dashboard_ponto_coleta(
     ponto_id: int,
     db: Session = Depends(get_db),
-    usuario_atual: Usuario = Depends(require_role("admin", "ponto_coleta")),
+    usuario_atual: Usuario = Depends(require_role("admin", "cooperativa")),
 ):
     """Retorna dados consolidados para dashboard operacional do ponto de coleta."""
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
@@ -164,7 +164,7 @@ async def obter_ponto_coleta(
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
     if not ponto:
         raise_not_found("Ponto de coleta não encontrado.")
-    if usuario_atual.role == "ponto_coleta":
+    if usuario_atual.role == "cooperativa":
         validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
     return _serializar_ponto(ponto)
 
@@ -189,12 +189,12 @@ async def listar_pontos_coleta(
     """
     # Usuários comuns só enxergam pontos disponíveis.
     # Admin e cooperativa podem solicitar incluir_inativos dentro do próprio escopo.
-    if incluir_inativos and usuario_atual.role not in {"admin", "ponto_coleta"}:
+    if incluir_inativos and usuario_atual.role not in {"admin", "cooperativa"}:
         incluir_inativos = False
 
     query = db.query(PontoColeta)
 
-    if usuario_atual.role == "ponto_coleta":
+    if usuario_atual.role == "cooperativa":
         query = query.filter(PontoColeta.cooperativa_id == usuario_atual.id)
 
     if not incluir_inativos:

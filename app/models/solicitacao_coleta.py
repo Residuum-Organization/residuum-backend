@@ -18,6 +18,7 @@ class SolicitacaoColeta(Base):
     quantidade_inventario = Column(Float, nullable=False)
     inventario_solicitado = Column(JSON, nullable=False, default=dict)
     quantidade_coletada = Column(Float, nullable=True)
+    pesos_reais = Column(JSON, nullable=True)
     capacidade_maxima = Column(Float, nullable=True)
     observacao = Column(Text, nullable=True)
     motivo_recusa = Column(Text, nullable=True)
