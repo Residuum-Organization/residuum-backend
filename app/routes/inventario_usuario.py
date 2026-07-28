@@ -1,5 +1,6 @@
 """Rotas do inventário pessoal e transferências para pontos de coleta."""
 
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -230,7 +231,7 @@ def transferir_itens_em_lote(
         usuario_lat=obj_in.usuario_lat,
         usuario_long=obj_in.usuario_long,
         usuario_precisao=obj_in.usuario_precisao,
-        status="confirmado",
+        status="pendente",
         total_itens=len(obj_in.itens),
         peso_total=peso_total,
         pontos_estimados=calcular_pontos_proporcionais(peso_total, peso_total),
@@ -252,7 +253,7 @@ def transferir_itens_em_lote(
                 quantidade_confirmada=entrada.quantidade,
                 tipo_residuo=item.tipo_residuo,
                 observacao=obj_in.observacao,
-                status="confirmado",
+                status="pendente",
                 usuario_id=usuario.id,
                 usuario_lat=obj_in.usuario_lat,
                 usuario_long=obj_in.usuario_long,
@@ -262,7 +263,7 @@ def transferir_itens_em_lote(
                 ponto_coleta_id=ponto.id,
                 inventario_usuario_id=item.id,
                 transferencia_lote_id=lote.id,
-                identificado_em=datetime.now(timezone.utc) if hasattr(datetime, 'now') else None,
+                identificado_em=datetime.now(timezone.utc),
             )
         )
 

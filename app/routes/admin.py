@@ -846,7 +846,7 @@ def metrics_resumo(db: Session = Depends(get_db)):
         "descartes": {
             "total": total_descartes,
             "pendentes": descartes_pendentes,
-            "kg_confirmados": float(kg_confirmados or 0),
+            "kg_confirmados": round(float(kg_confirmados or 0), 2),
         },
         "gamificacao": {
             "pontos_distribuidos": int(pontos_distribuidos or 0),
