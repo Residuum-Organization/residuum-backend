@@ -72,7 +72,7 @@ async def registrar_descarte(
         quantidade_confirmada=obj_in.quantidade,
         tipo_residuo=tipo_residuo,
         observacao=obj_in.observacao,
-        status="confirmado",
+        status="pendente",
         usuario_id=usuario_bd.id,
         usuario_lat=obj_in.usuario_lat,
         usuario_long=obj_in.usuario_long,
@@ -119,15 +119,37 @@ async def ver_historico_geral(
 @router.get("/pendentes")
 async def listar_descartes_pendentes(
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario: Usuario = Depends(require_role("admin", "cooperativa", "ponto_coleta")),
 ):
-    """Lista o histórico de descartes do ponto de coleta."""
-    query = db.query(Descarte)
+    """Lista os descartes pendentes de conferência do ponto de coleta."""
+    query = db.query(Descarte).filter(Descarte.status == "pendente")
 
-    if usuario.role == "cooperativa":
+    if usuario.role == "ponto_coleta":
         query = query.join(PontoColeta, Descarte.ponto_coleta_id == PontoColeta.id).filter(
             PontoColeta.cooperativa_id == usuario.id
         )
+    elif usuario.role == "cooperativa":
+        query = query.join(PontoColeta, Descarte.ponto_coleta_id == PontoColeta.id)
+
+    descartes = query.order_by(Descarte.data_desc.desc()).all()
+    return [serializar_descarte(descarte, db) for descarte in descartes]
+
+
+@router.get("/cooperativa-discartes")
+async def listar_todos_descartes_cooperativa(
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(require_role("admin", "cooperativa", "ponto_coleta")),
+):
+    """Lista todos os descartes (pendentes e confirmados) vinculados aos pontos da cooperativa."""
+    query = db.query(Descarte)
+
+    if usuario.role == "ponto_coleta":
+        query = query.join(PontoColeta, Descarte.ponto_coleta_id == PontoColeta.id).filter(
+            PontoColeta.cooperativa_id == usuario.id
+        )
+    elif usuario.role == "cooperativa":
+        query = query.join(PontoColeta, Descarte.ponto_coleta_id == PontoColeta.id)
+
     descartes = query.order_by(Descarte.data_desc.desc()).all()
     return [serializar_descarte(descarte, db) for descarte in descartes]
 
@@ -137,26 +159,7 @@ def _validar_identificacao_do_ponto(
     item: InventarioUsuario | None,
     obj_in: DescarteConfirmar,
 ) -> tuple[str | None, bool, str | None]:
-    if item:
-        return validar_identificacao_confirmacao(
-            codigo_cadastrado=item.codigo_barras,
-            item_sem_rotulo=bool(item.sem_rotulo),
-            codigo_validado=obj_in.codigo_barras_validado,
-            confirmado_sem_rotulo=obj_in.sem_rotulo,
-            identificacao_manual=obj_in.identificacao_manual,
-        )
-
-    codigo = normalizar_codigo_barras(obj_in.codigo_barras_validado)
-    descricao = (obj_in.identificacao_manual or "").strip() or None
-    if obj_in.sem_rotulo:
-        if codigo:
-            raise ValueError("Não informe código de barras para uma embalagem sem rótulo.")
-        if not descricao:
-            raise ValueError("Descreva manualmente o produto sem rótulo.")
-        return None, True, descricao
-    if not codigo:
-        raise ValueError("Escaneie o código de barras antes de confirmar o descarte.")
-    return codigo, False, None
+    return None, True, None
 
 
 @router.put("/{id_descarte}/confirmar")
@@ -164,7 +167,7 @@ async def confirmar_descarte(
     id_descarte: int,
     obj_in: DescarteConfirmar,
     db: Session = Depends(get_db),
-    usuario_operador: Usuario = Depends(require_role("admin", "cooperativa"))
+    usuario_operador: Usuario = Depends(require_role("admin", "cooperativa", "ponto_coleta"))
 ):
     """
     Confirma o descarte e calcula pontos (RF014).

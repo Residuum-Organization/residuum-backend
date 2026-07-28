@@ -35,7 +35,7 @@ class LancamentoAvulsoRequest(BaseModel):
 def lancamento_avulso(
     payload: LancamentoAvulsoRequest,
     db: Session = Depends(get_db),
-    cooperativa: Usuario = Depends(require_role("cooperativa")),
+    cooperativa: Usuario = Depends(require_role("cooperativa", "ponto_coleta")),
 ):
     """Lança o peso coletado de forma direta, abatendo o inventário do ponto."""
     ponto = db.query(PontoColeta).filter(
@@ -98,7 +98,7 @@ def cadastrar_cooperativa(
 @router.get("/solicitacoes-coleta", response_model=list[SolicitacaoColetaResponse])
 def listar_solicitacoes_coleta(
     db: Session = Depends(get_db),
-    cooperativa: Usuario = Depends(require_role("cooperativa")),
+    cooperativa: Usuario = Depends(require_role("cooperativa", "ponto_coleta")),
 ):
     """Lista solicitações encaminhadas à cooperativa autenticada."""
     return (
@@ -216,15 +216,13 @@ def recusar_solicitacao_coleta(
 @router.get("/pontos-coleta")
 def listar_pontos_da_cooperativa(
     db: Session = Depends(get_db),
-    ponto_coleta: Usuario = Depends(require_role("cooperativa")),
+    ponto_coleta: Usuario = Depends(require_role("cooperativa", "ponto_coleta")),
 ):
     """Lista o ponto vinculado à conta de ponto de coleta autenticada."""
-    pontos = (
-        db.query(PontoColeta)
-        .filter(PontoColeta.cooperativa_id == ponto_coleta.id)
-        .order_by(PontoColeta.nome)
-        .all()
-    )
+    query = db.query(PontoColeta)
+    if ponto_coleta.role == "ponto_coleta":
+        query = query.filter(PontoColeta.cooperativa_id == ponto_coleta.id)
+    pontos = query.order_by(PontoColeta.nome).all()
     return [
         {
             "id": ponto.id,
@@ -249,7 +247,7 @@ def rejeitar_descarte_cooperativa(
     id_descarte: int,
     payload: RejeitarDescarteRequest,
     db: Session = Depends(get_db),
-    ponto_coleta: Usuario = Depends(require_role("cooperativa")),
+    ponto_coleta: Usuario = Depends(require_role("cooperativa", "ponto_coleta")),
 ):
     """Rejeita descarte pendente vinculado a ponto da cooperativa autenticada."""
     descarte = (

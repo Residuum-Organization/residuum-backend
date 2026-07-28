@@ -146,7 +146,7 @@ async def criar_ponto_coleta(
 async def obter_dashboard_ponto_coleta(
     ponto_id: int,
     db: Session = Depends(get_db),
-    usuario_atual: Usuario = Depends(require_role("admin", "cooperativa")),
+    usuario_atual: Usuario = Depends(require_role("admin", "cooperativa", "ponto_coleta")),
 ):
     """Retorna dados consolidados para dashboard operacional do ponto de coleta."""
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
@@ -164,8 +164,20 @@ async def obter_ponto_coleta(
     ponto = db.query(PontoColeta).filter(PontoColeta.id == ponto_id).first()
     if not ponto:
         raise_not_found("Ponto de coleta não encontrado.")
-    if usuario_atual.role == "cooperativa":
+    if usuario_atual.role in ("cooperativa", "ponto_coleta"):
         validar_acesso_operacional_ao_ponto(usuario_atual, ponto)
+    return _serializar_ponto(ponto)
+
+
+@router.get("/meu-ponto-coleta", tags=["Ponto de Coleta"])
+async def obter_meu_ponto_coleta(
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(require_role("ponto_coleta", "cooperativa", "admin")),
+):
+    """Obtém o ponto de coleta vinculado à conta do usuário autenticado."""
+    ponto = db.query(PontoColeta).filter(PontoColeta.cooperativa_id == usuario_atual.id).first()
+    if not ponto:
+        raise_not_found("Nenhum ponto de coleta vinculado a este perfil.")
     return _serializar_ponto(ponto)
 
 
@@ -188,14 +200,21 @@ async def listar_pontos_coleta(
     - Retorna distância calculada quando lat/long são informados.
     """
     # Usuários comuns só enxergam pontos disponíveis.
-    # Admin e cooperativa podem solicitar incluir_inativos dentro do próprio escopo.
-    if incluir_inativos and usuario_atual.role not in {"admin", "cooperativa"}:
+    # Admin e cooperativa/ponto_coleta podem solicitar incluir_inativos dentro do próprio escopo.
+    if incluir_inativos and usuario_atual.role not in {"admin", "cooperativa", "ponto_coleta"}:
         incluir_inativos = False
 
     query = db.query(PontoColeta)
 
-    if usuario_atual.role == "cooperativa":
+    if usuario_atual.role == "ponto_coleta":
         query = query.filter(PontoColeta.cooperativa_id == usuario_atual.id)
+    elif usuario_atual.role == "cooperativa":
+        query = query.filter(
+            or_(
+                PontoColeta.cooperativa_id == usuario_atual.id,
+                PontoColeta.cooperativa_id.isnot(None)
+            )
+        )
 
     if not incluir_inativos:
         query = query.filter(PontoColeta.ativo == 1)
