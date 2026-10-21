@@ -13,13 +13,15 @@ conforme as parcerias e entram neste módulo.
 """
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import raise_bad_request, raise_forbidden
-from app.models.campanha import Campanha, CampanhaRequisito, InscricaoCampanha
+from app.core.exceptions import raise_bad_request, raise_forbidden, raise_not_found
+from app.models.campanha import Campanha, CampanhaBonus, CampanhaRequisito, InscricaoCampanha
+from app.services.pontuacao_service import calcular_pontos_proporcionais
 from app.models.descarte import Descarte
 from app.models.inventario_usuario import InventarioUsuario
 from app.models.pontuacao import Pontuacao
@@ -30,6 +32,38 @@ def _aware(valor: datetime | None) -> datetime | None:
     if valor is not None and valor.tzinfo is None:
         return valor.replace(tzinfo=timezone.utc)
     return valor
+
+
+def normalizar_config_mecanica(tipo: str, config: dict) -> dict:
+    """Valida e normaliza a configuração de uma mecânica."""
+    if tipo == "dobro_pontos":
+        try:
+            quantidade = int(config.get("quantidade"))
+        except (TypeError, ValueError):
+            quantidade = 0
+        if quantidade < 1:
+            raise_bad_request("Dobro de pontos: informe a quantidade de unidades necessária (1 ou mais).")
+        tipo_residuo = str(config.get("tipo_residuo") or "").strip() or None
+        codigos = []
+        for codigo in config.get("codigos_barras") or []:
+            texto = str(codigo).strip()
+            if texto and texto not in codigos:
+                codigos.append(texto)
+        if not tipo_residuo and not codigos:
+            raise_bad_request("Dobro de pontos: informe o resíduo (material e/ou código de barras).")
+        return {"tipo_residuo": tipo_residuo, "codigos_barras": codigos, "quantidade": quantidade}
+    raise_bad_request(f"Mecânica desconhecida: {tipo}.")
+
+
+def validar_mecanicas(mecanicas: list) -> list[dict]:
+    """Normaliza as mecânicas de uma campanha (uma por tipo)."""
+    tipos = [m.tipo for m in mecanicas]
+    if len(tipos) != len(set(tipos)):
+        raise_bad_request("Cada mecânica só pode aparecer uma vez por campanha.")
+    return [
+        {"tipo": m.tipo, "ativa": m.ativa, "config": normalizar_config_mecanica(m.tipo, m.config)}
+        for m in mecanicas
+    ]
 
 
 def validar_definicao(acesso: str, pontos_recompensa: int, requisitos: list) -> None:
@@ -93,6 +127,30 @@ def _progresso_requisito(requisito: CampanhaRequisito, atual: int) -> dict:
     }
 
 
+def _progresso_dobro_pontos(db, usuario_id, mecanica, desde, fim, participando, acesso_liberado, concedida) -> dict:
+    """Meta de unidades do resíduo definido; o bônus é o dobro dos pontos dessas unidades."""
+    config = mecanica.config or {}
+    quantidade = int(config.get("quantidade") or 0)
+    filtro = SimpleNamespace(
+        tipo_residuo=config.get("tipo_residuo"),
+        codigos_barras=list(config.get("codigos_barras") or []),
+    )
+    atual = contar_unidades(db, usuario_id, filtro, desde, fim) if participando else 0
+    cumprida = quantidade > 0 and atual >= quantidade
+    return {
+        "tipo": mecanica.tipo,
+        "atual": min(atual, quantidade),
+        "quantidade": quantidade,
+        "cumprida": cumprida,
+        # Bônus = mesmos pontos básicos das unidades da meta (dobra o que elas valem).
+        "pontos": calcular_pontos_proporcionais(quantidade, quantidade),
+        "disponivel": acesso_liberado and cumprida and not concedida,
+        "concedida": concedida,
+        "tipo_residuo": filtro.tipo_residuo,
+        "codigos_barras": filtro.codigos_barras,
+    }
+
+
 def avaliar(db: Session, campanha: Campanha, usuario: Usuario) -> dict:
     """Progresso do morador na campanha.
 
@@ -130,12 +188,25 @@ def avaliar(db: Session, campanha: Campanha, usuario: Usuario) -> dict:
     concedida = bool(inscricao and inscricao.recompensa_concedida_em)
     pontos = int(campanha.pontos_recompensa or 0)
 
+    bonus_pagos = set()
+    if participando:
+        bonus_pagos = {
+            linha.mecanica
+            for linha in db.query(CampanhaBonus).filter(CampanhaBonus.inscricao_id == inscricao.id).all()
+        }
+    mecanicas = [
+        _progresso_dobro_pontos(db, usuario.id, m, desde, fim, participando, acesso_liberado, m.tipo in bonus_pagos)
+        for m in campanha.mecanicas
+        if m.ativa and m.tipo == "dobro_pontos"
+    ]
+
     return {
         "campanha_id": campanha.id,
         "acesso": campanha.acesso,
         "participando": participando,
         "entrada": entrada,
         "missoes": missoes,
+        "mecanicas": mecanicas,
         "entrada_cumprida": entrada_cumprida,
         "missoes_cumpridas": missoes_cumpridas,
         "acesso_liberado": acesso_liberado,
@@ -161,6 +232,38 @@ def aderir(db: Session, campanha: Campanha, usuario: Usuario) -> InscricaoCampan
         raise_bad_request("Você já participa desta campanha.")
     db.refresh(inscricao)
     return inscricao
+
+
+def conceder_bonus_mecanica(db: Session, campanha: Campanha, usuario: Usuario, tipo: str) -> CampanhaBonus:
+    """Paga o bônus de uma mecânica ligada, uma única vez por adesão."""
+    # Trava a adesão para que dois cliques simultâneos não paguem duas vezes.
+    inscricao = obter_inscricao(db, campanha.id, usuario.id, bloquear=True)
+    if inscricao is None:
+        raise_forbidden("Participe da campanha para receber os bônus.")
+
+    estado = avaliar(db, campanha, usuario)
+    item = next((m for m in estado["mecanicas"] if m["tipo"] == tipo), None)
+    if item is None:
+        raise_not_found("Esta mecânica não está ativa nesta campanha.")
+    if item["concedida"]:
+        raise_bad_request("O bônus desta mecânica já foi recebido.")
+    if not estado["acesso_liberado"]:
+        raise_forbidden("Cumpra os requisitos de entrada para liberar os bônus desta campanha privada.")
+    if not item["cumprida"]:
+        raise_bad_request("Conclua a meta da mecânica para receber o bônus.")
+
+    dono = db.query(Usuario).filter(Usuario.id == usuario.id).with_for_update().first()
+    dono.pontuacao_total = int(dono.pontuacao_total or 0) + item["pontos"]
+    db.add(Pontuacao(pontos=item["pontos"], usuario_id=dono.id))
+    bonus = CampanhaBonus(inscricao_id=inscricao.id, mecanica=tipo, pontos=item["pontos"])
+    db.add(bonus)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise_bad_request("O bônus desta mecânica já foi recebido.")
+    db.refresh(bonus)
+    return bonus
 
 
 def conceder_recompensa(db: Session, campanha: Campanha, usuario: Usuario) -> InscricaoCampanha:

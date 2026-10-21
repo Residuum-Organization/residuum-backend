@@ -12,13 +12,15 @@ from app.models.campanha import Campanha, CampanhaRequisito
 from app.models.descarte import Descarte
 from app.models.inventario_usuario import InventarioUsuario
 from app.models.usuario import Usuario
+from app.models.campanha import CampanhaMecanica
 from app.routes.campanha import (
     obter_campanha,
     participar_campanha,
     progresso_campanha,
+    receber_bonus_mecanica,
     receber_recompensa_campanha,
 )
-from app.schemas.campanha import RequisitoInput
+from app.schemas.campanha import MecanicaInput, RequisitoInput
 from app.services import campanha_service
 
 COCA = "7894900011517"
@@ -49,7 +51,7 @@ class CampanhaTestCase(unittest.TestCase):
         self.session.close()
         self.engine.dispose()
 
-    def _campanha(self, requisitos=(), **kwargs) -> Campanha:
+    def _campanha(self, requisitos=(), mecanicas=(), **kwargs) -> Campanha:
         dados = {
             "titulo": "Campanha Teste",
             "patrocinador": "Parceiro",
@@ -59,6 +61,7 @@ class CampanhaTestCase(unittest.TestCase):
         dados.update(kwargs)
         campanha = Campanha(**dados)
         campanha.requisitos = [CampanhaRequisito(**r) for r in requisitos]
+        campanha.mecanicas = [CampanhaMecanica(**m) for m in mecanicas]
         self.session.add(campanha)
         self.session.flush()
         return campanha
@@ -262,6 +265,115 @@ class CampanhaTestCase(unittest.TestCase):
             receber_recompensa_campanha(campanha.id, self.session, self.usuario)
         self.assertEqual(repetida.exception.status_code, 400)
         self.assertEqual(self.usuario.pontuacao_total, 50)
+
+    # --- mecanica: dobro de pontos ---------------------------------------
+
+    def _dobro(self, quantidade=4, ativa=True, **config):
+        base = {"tipo_residuo": "lata", "codigos_barras": [COCA], "quantidade": quantidade}
+        base.update(config)
+        return {"tipo": "dobro_pontos", "ativa": ativa, "config": base}
+
+    def test_dobro_de_pontos_so_conta_depois_da_adesao_e_paga_uma_vez(self):
+        campanha = self._campanha(mecanicas=[self._dobro(quantidade=4)])
+        self._descarte(quantidade=9)  # antes de participar: nao conta
+        participar_campanha(campanha.id, self.session, self.usuario)
+
+        antes = progresso_campanha(campanha.id, self.session, self.usuario)["mecanicas"][0]
+        self.assertEqual((antes["atual"], antes["disponivel"]), (0, False))
+
+        self._descarte(quantidade=4, quando=self._apos_adesao())
+        depois = progresso_campanha(campanha.id, self.session, self.usuario)["mecanicas"][0]
+        self.assertTrue(depois["disponivel"])
+        # bonus = pontos basicos das 4 unidades da meta (10 por unidade)
+        self.assertEqual(depois["pontos"], 40)
+
+        bonus = receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
+        self.assertEqual(bonus.pontos, 40)
+        self.assertEqual(self.usuario.pontuacao_total, 40)
+
+        with self.assertRaises(HTTPException) as repetido:
+            receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
+        self.assertEqual(repetido.exception.status_code, 400)
+        self.assertEqual(self.usuario.pontuacao_total, 40)
+
+    def test_dobro_de_pontos_exige_participar(self):
+        campanha = self._campanha(mecanicas=[self._dobro(quantidade=1)])
+        self._descarte(quantidade=5, quando=self._apos_adesao())
+
+        with self.assertRaises(HTTPException) as erro:
+            receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
+
+        self.assertEqual(erro.exception.status_code, 403)
+        self.assertEqual(self.usuario.pontuacao_total, 0)
+
+    def test_mecanica_desligada_pelo_admin_nao_aparece_nem_paga(self):
+        campanha = self._campanha(mecanicas=[self._dobro(quantidade=1, ativa=False)])
+        participar_campanha(campanha.id, self.session, self.usuario)
+        self._descarte(quantidade=5, quando=self._apos_adesao())
+
+        self.assertEqual(progresso_campanha(campanha.id, self.session, self.usuario)["mecanicas"], [])
+        with self.assertRaises(HTTPException) as erro:
+            receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
+        self.assertEqual(erro.exception.status_code, 404)
+
+    def test_dobro_em_campanha_privada_espera_a_entrada(self):
+        campanha = self._campanha(
+            acesso="privada",
+            requisitos=[{**self._lata_coca(5), "papel": "entrada"}],
+            mecanicas=[self._dobro(quantidade=2)],
+        )
+        participar_campanha(campanha.id, self.session, self.usuario)
+        self._descarte(quantidade=2, quando=self._apos_adesao())
+
+        with self.assertRaises(HTTPException) as erro:
+            receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
+        self.assertEqual(erro.exception.status_code, 403)
+
+        self._descarte(quantidade=3, quando=self._apos_adesao())
+        bonus = receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
+        self.assertEqual(bonus.pontos, 20)
+
+    def test_missoes_e_dobro_funcionam_de_forma_independente(self):
+        campanha = self._campanha(
+            pontos_recompensa=50,
+            requisitos=[self._lata_coca(1)],
+            mecanicas=[self._dobro(quantidade=3)],
+        )
+        participar_campanha(campanha.id, self.session, self.usuario)
+        self._descarte(quantidade=1, quando=self._apos_adesao())
+
+        # missao cumprida, dobro ainda nao
+        receber_recompensa_campanha(campanha.id, self.session, self.usuario)
+        self.assertEqual(self.usuario.pontuacao_total, 50)
+        with self.assertRaises(HTTPException):
+            receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
+
+        self._descarte(quantidade=2, quando=self._apos_adesao())
+        receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
+        self.assertEqual(self.usuario.pontuacao_total, 80)
+
+    def test_configuracao_de_mecanica_invalida_e_rejeitada(self):
+        invalidas = [
+            {"quantidade": 0, "tipo_residuo": "metal"},
+            {"quantidade": "abc", "tipo_residuo": "metal"},
+            {"quantidade": 3},  # sem residuo definido
+        ]
+        for config in invalidas:
+            with self.assertRaises(HTTPException) as erro:
+                campanha_service.normalizar_config_mecanica("dobro_pontos", config)
+            self.assertEqual(erro.exception.status_code, 400)
+
+        valida = campanha_service.normalizar_config_mecanica(
+            "dobro_pontos", {"quantidade": "3", "codigos_barras": [" 789 ", "789", ""]}
+        )
+        self.assertEqual(valida, {"tipo_residuo": None, "codigos_barras": ["789"], "quantidade": 3})
+
+        duplicadas = [
+            MecanicaInput(tipo="dobro_pontos", config={"quantidade": 1, "tipo_residuo": "metal"}),
+            MecanicaInput(tipo="dobro_pontos", config={"quantidade": 2, "tipo_residuo": "vidro"}),
+        ]
+        with self.assertRaises(HTTPException):
+            campanha_service.validar_mecanicas(duplicadas)
 
     # --- definicao -------------------------------------------------------
 

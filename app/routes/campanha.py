@@ -10,9 +10,10 @@ from app.core.decorators import public
 from app.core.exceptions import raise_bad_request, raise_not_found
 from app.database import get_db
 from app.dependencies.auth import get_current_user, require_role
-from app.models.campanha import Campanha, CampanhaRequisito, InscricaoCampanha
+from app.models.campanha import Campanha, CampanhaMecanica, CampanhaRequisito, InscricaoCampanha
 from app.models.usuario import Usuario
 from app.schemas.campanha import (
+    BonusMecanicaResponse,
     CampanhaCreate,
     CampanhaProgressoResponse,
     CampanhaUpdate,
@@ -26,6 +27,10 @@ router = APIRouter(prefix="/campanhas", tags=["Campanhas"])
 
 def _montar_requisitos(requisitos) -> list[CampanhaRequisito]:
     return [CampanhaRequisito(**item.model_dump()) for item in requisitos]
+
+
+def _montar_mecanicas(mecanicas) -> list[CampanhaMecanica]:
+    return [CampanhaMecanica(**item) for item in campanha_service.validar_mecanicas(mecanicas)]
 
 
 def _inscricao_response(inscricao: InscricaoCampanha, campanha: Campanha) -> InscricaoCampanhaResponse:
@@ -85,6 +90,7 @@ def criar_campanha(
         data_inicio=payload.data_inicio,
         data_fim=payload.data_fim,
         requisitos=_montar_requisitos(payload.requisitos),
+        mecanicas=_montar_mecanicas(payload.mecanicas),
     )
     db.add(campanha)
     db.commit()
@@ -106,6 +112,7 @@ def atualizar_campanha(
 
     dados = payload.dict(exclude_unset=True)
     dados.pop("requisitos", None)
+    dados.pop("mecanicas", None)
 
     acesso = dados.get("acesso", campanha.acesso)
     pontos = dados.get("pontos_recompensa", campanha.pontos_recompensa)
@@ -114,10 +121,17 @@ def atualizar_campanha(
     if payload.requisitos is not None or "acesso" in dados or "pontos_recompensa" in dados:
         campanha_service.validar_definicao(acesso, pontos, requisitos)
 
+    novas_mecanicas = _montar_mecanicas(payload.mecanicas) if payload.mecanicas is not None else None
+
     for key, value in dados.items():
         setattr(campanha, key, value)
     if payload.requisitos is not None:
         campanha.requisitos = _montar_requisitos(payload.requisitos)
+    if novas_mecanicas is not None:
+        # Apaga antes de inserir: o par (campanha, tipo) é único.
+        campanha.mecanicas = []
+        db.flush()
+        campanha.mecanicas = novas_mecanicas
 
     db.commit()
     db.refresh(campanha)
@@ -221,6 +235,21 @@ def receber_recompensa_campanha(
         raise_not_found("Campanha nao encontrada.")
     inscricao = campanha_service.conceder_recompensa(db, campanha, usuario)
     return _inscricao_response(inscricao, campanha)
+
+
+@router.post("/{campanha_id}/mecanicas/{tipo}/bonus", response_model=BonusMecanicaResponse)
+def receber_bonus_mecanica(
+    campanha_id: int,
+    tipo: str,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    """Credita (uma vez) o bonus de uma mecanica ligada a quem participa e cumpriu a meta."""
+    campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
+    if not campanha or campanha.status != "ativa":
+        raise_not_found("Campanha nao encontrada.")
+    bonus = campanha_service.conceder_bonus_mecanica(db, campanha, usuario, tipo)
+    return BonusMecanicaResponse(campanha_id=campanha.id, mecanica=bonus.mecanica, pontos=bonus.pontos)
 
 
 # Declarada por último para não capturar /admin nem /minhas-inscricoes.

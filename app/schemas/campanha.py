@@ -43,6 +43,27 @@ class RequisitoResponse(RequisitoInput):
         from_attributes = True
 
 
+TipoMecanica = Literal["dobro_pontos"]
+
+
+class MecanicaInput(BaseModel):
+    """Mecânica ligada ou desligada pelo admin. `config` depende do tipo.
+
+    dobro_pontos: {"tipo_residuo": str?, "codigos_barras": [str], "quantidade": int}
+    """
+
+    tipo: TipoMecanica
+    ativa: bool = True
+    config: dict = Field(default_factory=dict)
+
+
+class MecanicaResponse(MecanicaInput):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
 class CampanhaCreate(BaseModel):
     titulo: str = Field(..., min_length=1, max_length=255)
     descricao: Optional[str] = None
@@ -52,6 +73,7 @@ class CampanhaCreate(BaseModel):
     acesso: Acesso = "publica"
     condicoes: Optional[str] = None
     requisitos: list[RequisitoInput] = Field(default_factory=list)
+    mecanicas: list[MecanicaInput] = Field(default_factory=list)
     status: str = Field("ativa", max_length=30)
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
@@ -67,6 +89,8 @@ class CampanhaUpdate(BaseModel):
     condicoes: Optional[str] = None
     # None mantém os requisitos atuais; uma lista (mesmo vazia) substitui todos.
     requisitos: Optional[list[RequisitoInput]] = None
+    # None mantém as mecânicas atuais; uma lista (mesmo vazia) substitui todas.
+    mecanicas: Optional[list[MecanicaInput]] = None
     status: Optional[str] = Field(None, max_length=30)
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
@@ -82,6 +106,7 @@ class CampanhaResponse(BaseModel):
     acesso: str = "publica"
     condicoes: Optional[str] = None
     requisitos: list[RequisitoResponse] = Field(default_factory=list)
+    mecanicas: list[MecanicaResponse] = Field(default_factory=list)
     status: str
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
@@ -115,12 +140,31 @@ class RequisitoProgresso(BaseModel):
     cumprido: bool
 
 
+class MecanicaProgresso(BaseModel):
+    tipo: str
+    atual: int
+    quantidade: int
+    cumprida: bool
+    pontos: int
+    disponivel: bool
+    concedida: bool
+    tipo_residuo: Optional[str] = None
+    codigos_barras: list[str] = Field(default_factory=list)
+
+
+class BonusMecanicaResponse(BaseModel):
+    campanha_id: int
+    mecanica: str
+    pontos: int
+
+
 class CampanhaProgressoResponse(BaseModel):
     campanha_id: int
     acesso: str
     participando: bool
     entrada: list[RequisitoProgresso]
     missoes: list[RequisitoProgresso]
+    mecanicas: list[MecanicaProgresso] = Field(default_factory=list)
     entrada_cumprida: bool
     missoes_cumpridas: bool
     acesso_liberado: bool

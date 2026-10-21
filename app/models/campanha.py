@@ -6,6 +6,7 @@ usuário.
 """
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -63,6 +64,34 @@ class Campanha(Base):
         cascade="all, delete-orphan",
         order_by="CampanhaRequisito.id",
     )
+    mecanicas = relationship(
+        "CampanhaMecanica",
+        back_populates="campanha",
+        cascade="all, delete-orphan",
+        order_by="CampanhaMecanica.id",
+    )
+
+
+class CampanhaMecanica(Base):
+    """Mecânica de bônus que o admin liga ou desliga em cada campanha.
+
+    Cada campanha pode ter uma mecânica de cada tipo. A configuração (`config`)
+    depende do tipo. Tipos atuais: "dobro_pontos" (config: tipo_residuo,
+    codigos_barras, quantidade). Novas mecânicas entram como novos tipos.
+    """
+
+    __tablename__ = "campanha_mecanica"
+    __table_args__ = (
+        UniqueConstraint("campanha_id", "tipo", name="uq_campanha_mecanica_tipo"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    campanha_id = Column(Integer, ForeignKey("campanhas.id", ondelete="CASCADE"), nullable=False, index=True)
+    tipo = Column(String(30), nullable=False)
+    ativa = Column(Boolean, nullable=False, default=True, server_default="true")
+    config = Column(JSON, nullable=False, default=dict)
+
+    campanha = relationship("Campanha", back_populates="mecanicas")
 
 
 class CampanhaRequisito(Base):
@@ -105,3 +134,18 @@ class InscricaoCampanha(Base):
 
     campanha = relationship("Campanha", back_populates="inscricoes")
     usuario = relationship("Usuario")
+
+
+class CampanhaBonus(Base):
+    """Bônus de uma mecânica já pago a uma adesão (no máximo um por mecânica)."""
+
+    __tablename__ = "campanha_bonus"
+    __table_args__ = (
+        UniqueConstraint("inscricao_id", "mecanica", name="uq_campanha_bonus_inscricao_mecanica"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    inscricao_id = Column(Integer, ForeignKey("inscricao_campanha.id", ondelete="CASCADE"), nullable=False, index=True)
+    mecanica = Column(String(30), nullable=False)
+    pontos = Column(Integer, nullable=False)
+    concedido_em = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
