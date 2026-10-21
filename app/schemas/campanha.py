@@ -123,6 +123,7 @@ class CampanhaProgressoResponse(BaseModel):
     missoes: list[RequisitoProgresso]
     entrada_cumprida: bool
     missoes_cumpridas: bool
+    acesso_liberado: bool
     pode_participar: bool
     recompensa_pontos: int
     recompensa_disponivel: bool

@@ -35,8 +35,8 @@ class Campanha(Base):
     # Pontos concedidos ao participar da campanha.
     pontos_recompensa = Column(Integer, nullable=False, default=0, server_default="0")
 
-    # "publica": qualquer morador pode participar. "privada": só quem cumprir os
-    # requisitos de entrada (CampanhaRequisito com papel "entrada").
+    # "publica": os bônus valem para quem participa. "privada": além de
+    # participar, é preciso cumprir os requisitos de entrada (papel "entrada").
     acesso = Column(String(20), nullable=False, default="publica", server_default="publica")
 
     # Texto livre exibido ao morador antes da adesão (TSK-MOR-023).
@@ -68,9 +68,10 @@ class Campanha(Base):
 class CampanhaRequisito(Base):
     """Condição medida em descartes confirmados.
 
-    papel "entrada": precisa estar cumprida para participar de campanha privada.
-    papel "missao": precisa estar cumprida, depois da adesão, para receber a
-    recompensa. Filtros vazios significam "qualquer descarte confirmado".
+    papel "entrada": em campanha privada, precisa estar cumprido para liberar
+    os bônus. papel "missao": precisa estar cumprido para receber a recompensa.
+    Ambos contam só descartes feitos depois da adesão. Filtros vazios
+    significam "qualquer descarte confirmado".
     """
 
     __tablename__ = "campanha_requisito"

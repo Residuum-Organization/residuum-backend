@@ -175,9 +175,10 @@ def participar_campanha(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
 ):
-    """Registra a participacao (gratuita). Sem participar nao ha bonus da campanha.
+    """Registra a participacao (gratuita, inclusive nas privadas).
 
-    Campanha privada exige os requisitos de entrada. Aderir nao credita pontos.
+    Sem participar nao ha bonus nem progresso: nenhum descarte conta antes da
+    adesao. Aderir nao credita pontos.
     """
     campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
     if not campanha:

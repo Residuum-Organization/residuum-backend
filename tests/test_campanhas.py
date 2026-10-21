@@ -128,50 +128,82 @@ class CampanhaTestCase(unittest.TestCase):
 
         self.assertEqual(erro.exception.status_code, 400)
 
-    def test_campanha_privada_exige_requisito_de_entrada(self):
+    def test_campanha_privada_aceita_adesao_mas_so_libera_bonus_apos_a_entrada(self):
         campanha = self._campanha(
             acesso="privada",
-            requisitos=[{**self._lata_coca(5), "papel": "entrada"}],
+            pontos_recompensa=80,
+            requisitos=[{**self._lata_coca(5), "papel": "entrada"}, self._lata_coca(1)],
         )
-        self._descarte(quantidade=4)
+        self._descarte(quantidade=9)  # antes de participar: nao conta para nada
 
-        with self.assertRaises(HTTPException) as erro:
-            participar_campanha(campanha.id, self.session, self.usuario)
-        self.assertEqual(erro.exception.status_code, 403)
+        participar_campanha(campanha.id, self.session, self.usuario)
+        estado = progresso_campanha(campanha.id, self.session, self.usuario)
+        self.assertTrue(estado["participando"])
+        self.assertEqual(estado["entrada"][0]["atual"], 0)
+        self.assertFalse(estado["acesso_liberado"])
 
-        self._descarte(quantidade=1)
-        inscricao = participar_campanha(campanha.id, self.session, self.usuario)
-        self.assertEqual(inscricao.campanha_id, campanha.id)
+        # missao cumprida, mas a entrada ainda nao: sem recompensa
+        self._descarte(quantidade=1, quando=self._apos_adesao())
+        self.assertFalse(progresso_campanha(campanha.id, self.session, self.usuario)["recompensa_disponivel"])
+        with self.assertRaises(HTTPException) as bloqueada:
+            receber_recompensa_campanha(campanha.id, self.session, self.usuario)
+        self.assertEqual(bloqueada.exception.status_code, 403)
+        self.assertEqual(self.usuario.pontuacao_total, 0)
 
-    def test_entrada_ignora_descarte_pendente_de_outro_produto_e_fora_da_vigencia(self):
+        self._descarte(quantidade=4, quando=self._apos_adesao())
+        estado = progresso_campanha(campanha.id, self.session, self.usuario)
+        self.assertTrue(estado["acesso_liberado"])
+        inscricao = receber_recompensa_campanha(campanha.id, self.session, self.usuario)
+        self.assertEqual(inscricao.pontos_concedidos, 80)
+        self.assertEqual(self.usuario.pontuacao_total, 80)
+
+    def test_sem_adesao_nenhum_requisito_acumula_progresso(self):
+        campanha = self._campanha(
+            acesso="privada",
+            requisitos=[{**self._lata_coca(2), "papel": "entrada"}, self._lata_coca(2)],
+        )
+        self._descarte(quantidade=5, quando=self._apos_adesao())
+
+        estado = progresso_campanha(campanha.id, self.session, self.usuario)
+
+        self.assertFalse(estado["participando"])
+        self.assertEqual(estado["entrada"][0]["atual"], 0)
+        self.assertEqual(estado["missoes"][0]["atual"], 0)
+        self.assertTrue(estado["pode_participar"])
+
+    def test_requisito_ignora_descarte_pendente_de_outro_produto_e_fora_da_vigencia(self):
         campanha = self._campanha(
             acesso="privada",
             data_inicio=self.agora - timedelta(days=10),
             requisitos=[{**self._lata_coca(2), "papel": "entrada"}],
         )
-        self._descarte(quantidade=1, status="pendente")
-        self._descarte(quantidade=1, codigo="7891000100103")
+        participar_campanha(campanha.id, self.session, self.usuario)
+        depois = self._apos_adesao()
+        self._descarte(quantidade=1, status="pendente", quando=depois)
+        self._descarte(quantidade=1, codigo="7891000100103", quando=depois)
+        self._descarte(quantidade=1, tipo="vidro", quando=depois)
         self._descarte(quantidade=1, quando=self.agora - timedelta(days=30))
-        self._descarte(quantidade=1, tipo="vidro")
 
         estado = progresso_campanha(campanha.id, self.session, self.usuario)
 
         self.assertEqual(estado["entrada"][0]["atual"], 0)
-        self.assertFalse(estado["pode_participar"])
+        self.assertFalse(estado["acesso_liberado"])
 
     def test_codigo_de_barras_vem_do_item_do_inventario(self):
         item = InventarioUsuario(usuario_id=self.usuario.id, tipo_residuo="lata", quantidade=3, codigo_barras=COCA)
         self.session.add(item)
         self.session.flush()
-        self._descarte(quantidade=3, codigo=None, inventario=item.id)
         campanha = self._campanha(
             acesso="privada",
             requisitos=[{**self._lata_coca(3), "papel": "entrada"}],
         )
+        participar_campanha(campanha.id, self.session, self.usuario)
+        self._descarte(quantidade=3, codigo=None, inventario=item.id, quando=self._apos_adesao())
 
         estado = progresso_campanha(campanha.id, self.session, self.usuario)
 
         self.assertTrue(estado["entrada_cumprida"])
+        self.assertTrue(estado["acesso_liberado"])
 
     # --- missoes e recompensa -------------------------------------------
 
@@ -187,6 +219,19 @@ class CampanhaTestCase(unittest.TestCase):
         depois = progresso_campanha(campanha.id, self.session, self.usuario)
         self.assertTrue(depois["missoes_cumpridas"])
         self.assertTrue(depois["recompensa_disponivel"])
+
+    def test_missao_nao_conta_descarte_anterior_a_adesao_mesmo_com_vigencia_aberta(self):
+        campanha = self._campanha(
+            pontos_recompensa=10,
+            data_inicio=self.agora - timedelta(days=60),
+            requisitos=[self._lata_coca(1)],
+        )
+        self._descarte(quantidade=3, quando=self.agora - timedelta(days=5))
+        participar_campanha(campanha.id, self.session, self.usuario)
+
+        estado = progresso_campanha(campanha.id, self.session, self.usuario)
+
+        self.assertFalse(estado["recompensa_disponivel"])
 
     def test_quem_nao_participa_nao_recebe_bonus(self):
         campanha = self._campanha(pontos_recompensa=50, requisitos=[self._lata_coca(1)])

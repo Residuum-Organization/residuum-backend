@@ -1,10 +1,15 @@
 """Regras de campanhas: acesso, requisitos medidos em descartes e recompensa.
 
 Regras (definidas pelo produto em 2026-10-21):
-- participar é gratuito, mas só quem participa recebe os bônus da campanha;
-- aderir não paga pontos; a recompensa vem de cumprir as missões depois da adesão;
-- campanha privada exige cumprir os requisitos de entrada antes de participar;
+- participar é gratuito, mas só quem aperta "Participar" recebe os bônus;
+- aderir não paga pontos; a recompensa vem de cumprir as missões;
+- NENHUM descarte conta para a campanha antes da adesão (entrada e missões);
+- campanha privada: os requisitos de entrada são o primeiro desafio depois da
+  adesão e liberam os bônus quando cumpridos;
 - requisitos contam descartes confirmados (por material e/ou código de barras).
+
+A mecânica atual é a de missões. Outras mecânicas (ex.: dobro de pontos) virão
+conforme as parcerias e entram neste módulo.
 """
 
 from datetime import datetime, timezone
@@ -91,35 +96,37 @@ def _progresso_requisito(requisito: CampanhaRequisito, atual: int) -> dict:
 def avaliar(db: Session, campanha: Campanha, usuario: Usuario) -> dict:
     """Progresso do morador na campanha.
 
-    Entrada conta descartes dentro da vigência, mesmo antes de participar.
-    Missões só contam depois da adesão (quem não participa não acumula bônus).
+    Nada conta antes da adesão: quem não aperta "Participar" não acumula
+    progresso nem recebe bônus. Entrada e missões contam descartes confirmados
+    a partir do momento da adesão, dentro da vigência.
     """
     inscricao = obter_inscricao(db, campanha.id, usuario.id)
+    participando = inscricao is not None
     inicio = _aware(campanha.data_inicio)
     fim = _aware(campanha.data_fim)
 
-    entrada = [
-        _progresso_requisito(r, contar_unidades(db, usuario.id, r, inicio, fim))
-        for r in campanha.requisitos
-        if r.papel == "entrada"
-    ]
-
-    desde_missao = None
-    if inscricao is not None:
+    desde = None
+    if participando:
         adesao = _aware(inscricao.criado_em)
-        desde_missao = max(inicio, adesao) if inicio else adesao
-    missoes = [
-        _progresso_requisito(
-            r,
-            contar_unidades(db, usuario.id, r, desde_missao, fim) if inscricao is not None else 0,
-        )
-        for r in campanha.requisitos
-        if r.papel == "missao"
-    ]
+        desde = max(inicio, adesao) if inicio else adesao
+
+    def progresso(papel: str) -> list[dict]:
+        return [
+            _progresso_requisito(
+                r,
+                contar_unidades(db, usuario.id, r, desde, fim) if participando else 0,
+            )
+            for r in campanha.requisitos
+            if r.papel == papel
+        ]
+
+    entrada = progresso("entrada")
+    missoes = progresso("missao")
 
     entrada_cumprida = all(item["cumprido"] for item in entrada)
     missoes_cumpridas = bool(missoes) and all(item["cumprido"] for item in missoes)
-    participando = inscricao is not None
+    # Na campanha privada, os bônus só valem depois de cumprir a entrada.
+    acesso_liberado = participando and (campanha.acesso != "privada" or entrada_cumprida)
     concedida = bool(inscricao and inscricao.recompensa_concedida_em)
     pontos = int(campanha.pontos_recompensa or 0)
 
@@ -131,19 +138,18 @@ def avaliar(db: Session, campanha: Campanha, usuario: Usuario) -> dict:
         "missoes": missoes,
         "entrada_cumprida": entrada_cumprida,
         "missoes_cumpridas": missoes_cumpridas,
-        "pode_participar": (not participando) and (campanha.acesso != "privada" or entrada_cumprida),
+        "acesso_liberado": acesso_liberado,
+        "pode_participar": not participando,
         "recompensa_pontos": pontos,
-        "recompensa_disponivel": participando and not concedida and missoes_cumpridas and pontos > 0,
+        "recompensa_disponivel": acesso_liberado and not concedida and missoes_cumpridas and pontos > 0,
         "recompensa_concedida": concedida,
     }
 
 
 def aderir(db: Session, campanha: Campanha, usuario: Usuario) -> InscricaoCampanha:
-    """Registra a participação (gratuita). Não credita pontos."""
+    """Registra a participação (gratuita, também nas privadas). Não credita pontos."""
     if obter_inscricao(db, campanha.id, usuario.id):
         raise_bad_request("Você já participa desta campanha.")
-    if campanha.acesso == "privada" and not avaliar(db, campanha, usuario)["entrada_cumprida"]:
-        raise_forbidden("Cumpra os requisitos de entrada para participar desta campanha privada.")
 
     inscricao = InscricaoCampanha(campanha_id=campanha.id, usuario_id=usuario.id, pontos_concedidos=0)
     db.add(inscricao)
@@ -167,6 +173,8 @@ def conceder_recompensa(db: Session, campanha: Campanha, usuario: Usuario) -> In
         raise_bad_request("A recompensa desta campanha já foi recebida.")
 
     estado = avaliar(db, campanha, usuario)
+    if not estado["acesso_liberado"]:
+        raise_forbidden("Cumpra os requisitos de entrada para liberar os bônus desta campanha privada.")
     if not estado["missoes_cumpridas"]:
         raise_bad_request("Conclua todas as missões da campanha para receber a recompensa.")
     pontos = estado["recompensa_pontos"]
