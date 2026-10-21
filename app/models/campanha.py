@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -34,10 +35,11 @@ class Campanha(Base):
     # Pontos concedidos ao participar da campanha.
     pontos_recompensa = Column(Integer, nullable=False, default=0, server_default="0")
 
-    # Informações exibidas ao morador antes da adesão (TSK-MOR-023). São apenas
-    # informativas: elegibilidade e apuração de meta dependem da PD-011.
-    produto_elegivel = Column(String(255), nullable=True)
-    meta_quantidade = Column(Integer, nullable=True)
+    # "publica": qualquer morador pode participar. "privada": só quem cumprir os
+    # requisitos de entrada (CampanhaRequisito com papel "entrada").
+    acesso = Column(String(20), nullable=False, default="publica", server_default="publica")
+
+    # Texto livre exibido ao morador antes da adesão (TSK-MOR-023).
     condicoes = Column(Text, nullable=True)
 
     status = Column(String(30), nullable=False, default="ativa", server_default="ativa")
@@ -55,6 +57,33 @@ class Campanha(Base):
     inscricoes = relationship(
         "InscricaoCampanha", back_populates="campanha", cascade="all, delete-orphan"
     )
+    requisitos = relationship(
+        "CampanhaRequisito",
+        back_populates="campanha",
+        cascade="all, delete-orphan",
+        order_by="CampanhaRequisito.id",
+    )
+
+
+class CampanhaRequisito(Base):
+    """Condição medida em descartes confirmados.
+
+    papel "entrada": precisa estar cumprida para participar de campanha privada.
+    papel "missao": precisa estar cumprida, depois da adesão, para receber a
+    recompensa. Filtros vazios significam "qualquer descarte confirmado".
+    """
+
+    __tablename__ = "campanha_requisito"
+
+    id = Column(Integer, primary_key=True, index=True)
+    campanha_id = Column(Integer, ForeignKey("campanhas.id", ondelete="CASCADE"), nullable=False, index=True)
+    papel = Column(String(20), nullable=False)
+    descricao = Column(String(255), nullable=True)
+    tipo_residuo = Column(String(50), nullable=True)
+    codigos_barras = Column(JSON, nullable=True)
+    quantidade = Column(Integer, nullable=False)
+
+    campanha = relationship("Campanha", back_populates="requisitos")
 
 
 class InscricaoCampanha(Base):
@@ -69,6 +98,8 @@ class InscricaoCampanha(Base):
     usuario_id = Column(Integer, ForeignKey("usuario.id"), nullable=False, index=True)
 
     pontos_concedidos = Column(Integer, nullable=False, default=0, server_default="0")
+    # Preenchido quando a recompensa da campanha é paga (uma única vez).
+    recompensa_concedida_em = Column(DateTime(timezone=True), nullable=True)
     criado_em = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     campanha = relationship("Campanha", back_populates="inscricoes")
