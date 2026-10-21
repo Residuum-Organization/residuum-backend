@@ -1,4 +1,4 @@
-"""Rotas de campanhas: consulta publica, cadastro (admin) e inscricao (usuario)."""
+"""Rotas de campanhas: consulta publica, cadastro (admin), adesao e recompensa (usuario)."""
 
 from datetime import datetime, timezone
 
@@ -10,17 +10,38 @@ from app.core.decorators import public
 from app.core.exceptions import raise_bad_request, raise_not_found
 from app.database import get_db
 from app.dependencies.auth import get_current_user, require_role
-from app.models.campanha import Campanha, InscricaoCampanha
-from app.models.pontuacao import Pontuacao
+from app.models.campanha import Campanha, CampanhaMecanica, CampanhaRequisito, InscricaoCampanha
 from app.models.usuario import Usuario
 from app.schemas.campanha import (
+    BonusMecanicaResponse,
     CampanhaCreate,
+    CampanhaProgressoResponse,
     CampanhaUpdate,
     CampanhaResponse,
     InscricaoCampanhaResponse,
 )
+from app.services import campanha_service
 
 router = APIRouter(prefix="/campanhas", tags=["Campanhas"])
+
+
+def _montar_requisitos(requisitos) -> list[CampanhaRequisito]:
+    return [CampanhaRequisito(**item.model_dump()) for item in requisitos]
+
+
+def _montar_mecanicas(mecanicas) -> list[CampanhaMecanica]:
+    return [CampanhaMecanica(**item) for item in campanha_service.validar_mecanicas(mecanicas)]
+
+
+def _inscricao_response(inscricao: InscricaoCampanha, campanha: Campanha) -> InscricaoCampanhaResponse:
+    return InscricaoCampanhaResponse(
+        id=inscricao.id,
+        campanha_id=inscricao.campanha_id,
+        pontos_concedidos=inscricao.pontos_concedidos,
+        criado_em=inscricao.criado_em,
+        titulo=campanha.titulo,
+        patrocinador=campanha.patrocinador,
+    )
 
 
 @router.get("", response_model=list[CampanhaResponse])
@@ -56,15 +77,20 @@ def criar_campanha(
     admin: Usuario = Depends(require_role("admin")),
 ):
     """Cadastra uma nova campanha. Restrito a administradores."""
+    campanha_service.validar_definicao(payload.acesso, payload.pontos_recompensa, payload.requisitos)
     campanha = Campanha(
         titulo=payload.titulo,
         descricao=payload.descricao,
         patrocinador=payload.patrocinador,
         patrocinador_logo_url=payload.patrocinador_logo_url,
         pontos_recompensa=payload.pontos_recompensa,
+        acesso=payload.acesso,
+        condicoes=payload.condicoes,
         status=payload.status,
         data_inicio=payload.data_inicio,
         data_fim=payload.data_fim,
+        requisitos=_montar_requisitos(payload.requisitos),
+        mecanicas=_montar_mecanicas(payload.mecanicas),
     )
     db.add(campanha)
     db.commit()
@@ -79,14 +105,33 @@ def atualizar_campanha(
     db: Session = Depends(get_db),
     admin: Usuario = Depends(require_role("admin")),
 ):
-    """Atualiza uma campanha existente."""
+    """Atualiza uma campanha existente. `requisitos`, quando enviado, substitui a lista."""
     campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
     if not campanha:
         raise_not_found("Campanha não encontrada.")
 
-    update_data = payload.dict(exclude_unset=True)
-    for key, value in update_data.items():
+    dados = payload.dict(exclude_unset=True)
+    dados.pop("requisitos", None)
+    dados.pop("mecanicas", None)
+
+    acesso = dados.get("acesso", campanha.acesso)
+    pontos = dados.get("pontos_recompensa", campanha.pontos_recompensa)
+    requisitos = payload.requisitos if payload.requisitos is not None else campanha.requisitos
+    # Só revalida quando a definição muda: não trava edição de campanhas antigas.
+    if payload.requisitos is not None or "acesso" in dados or "pontos_recompensa" in dados:
+        campanha_service.validar_definicao(acesso, pontos, requisitos)
+
+    novas_mecanicas = _montar_mecanicas(payload.mecanicas) if payload.mecanicas is not None else None
+
+    for key, value in dados.items():
         setattr(campanha, key, value)
+    if payload.requisitos is not None:
+        campanha.requisitos = _montar_requisitos(payload.requisitos)
+    if novas_mecanicas is not None:
+        # Apaga antes de inserir: o par (campanha, tipo) é único.
+        campanha.mecanicas = []
+        db.flush()
+        campanha.mecanicas = novas_mecanicas
 
     db.commit()
     db.refresh(campanha)
@@ -144,7 +189,11 @@ def participar_campanha(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
 ):
-    """Inscreve o usuário na campanha, acumulando os pontos de recompensa."""
+    """Registra a participacao (gratuita, inclusive nas privadas).
+
+    Sem participar nao ha bonus nem progresso: nenhum descarte conta antes da
+    adesao. Aderir nao credita pontos.
+    """
     campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
     if not campanha:
         raise_not_found("Campanha nao encontrada.")
@@ -157,39 +206,68 @@ def participar_campanha(
     if campanha.data_fim is not None and campanha.data_fim < agora:
         raise_bad_request("Campanha encerrada.")
 
-    ja_inscrito = (
-        db.query(InscricaoCampanha.id)
+    inscricao = campanha_service.aderir(db, campanha, usuario)
+    return _inscricao_response(inscricao, campanha)
+
+
+@router.get("/{campanha_id}/progresso", response_model=CampanhaProgressoResponse)
+def progresso_campanha(
+    campanha_id: int,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    """Progresso do usuario nos requisitos de entrada e nas missoes da campanha."""
+    campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
+    if not campanha or campanha.status != "ativa":
+        raise_not_found("Campanha nao encontrada.")
+    return campanha_service.avaliar(db, campanha, usuario)
+
+
+@router.post("/{campanha_id}/recompensa", response_model=InscricaoCampanhaResponse)
+def receber_recompensa_campanha(
+    campanha_id: int,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    """Credita a recompensa (uma vez) a quem participa e concluiu todas as missoes."""
+    campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
+    if not campanha or campanha.status != "ativa":
+        raise_not_found("Campanha nao encontrada.")
+    inscricao = campanha_service.conceder_recompensa(db, campanha, usuario)
+    return _inscricao_response(inscricao, campanha)
+
+
+@router.post("/{campanha_id}/mecanicas/{tipo}/bonus", response_model=BonusMecanicaResponse)
+def receber_bonus_mecanica(
+    campanha_id: int,
+    tipo: str,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    """Credita (uma vez) o bonus de uma mecanica ligada a quem participa e cumpriu a meta."""
+    campanha = db.query(Campanha).filter(Campanha.id == campanha_id).first()
+    if not campanha or campanha.status != "ativa":
+        raise_not_found("Campanha nao encontrada.")
+    bonus = campanha_service.conceder_bonus_mecanica(db, campanha, usuario, tipo)
+    return BonusMecanicaResponse(campanha_id=campanha.id, mecanica=bonus.mecanica, pontos=bonus.pontos)
+
+
+# Declarada por último para não capturar /admin nem /minhas-inscricoes.
+@router.get("/{campanha_id}", response_model=CampanhaResponse)
+@public
+def obter_campanha(campanha_id: int, db: Session = Depends(get_db)):
+    """Detalhe de uma campanha consultável (ativa e dentro da vigência)."""
+    agora = datetime.now(timezone.utc)
+    campanha = (
+        db.query(Campanha)
         .filter(
-            InscricaoCampanha.campanha_id == campanha.id,
-            InscricaoCampanha.usuario_id == usuario.id,
+            Campanha.id == campanha_id,
+            Campanha.status == "ativa",
+            or_(Campanha.data_inicio.is_(None), Campanha.data_inicio <= agora),
+            or_(Campanha.data_fim.is_(None), Campanha.data_fim >= agora),
         )
         .first()
     )
-    if ja_inscrito:
-        raise_bad_request("Você já participa desta campanha.")
-
-    pontos = int(campanha.pontos_recompensa or 0)
-
-    inscricao = InscricaoCampanha(
-        campanha_id=campanha.id,
-        usuario_id=usuario.id,
-        pontos_concedidos=pontos,
-    )
-    db.add(inscricao)
-
-    # Acumula os pontos da campanha na carteira do usuário.
-    if pontos > 0:
-        usuario.pontuacao_total = int(usuario.pontuacao_total or 0) + pontos
-        db.add(Pontuacao(pontos=pontos, usuario_id=usuario.id))
-
-    db.commit()
-    db.refresh(inscricao)
-
-    return InscricaoCampanhaResponse(
-        id=inscricao.id,
-        campanha_id=inscricao.campanha_id,
-        pontos_concedidos=inscricao.pontos_concedidos,
-        criado_em=inscricao.criado_em,
-        titulo=campanha.titulo,
-        patrocinador=campanha.patrocinador,
-    )
+    if not campanha:
+        raise_not_found("Campanha nao encontrada.")
+    return campanha
