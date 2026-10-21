@@ -34,6 +34,12 @@ class Campanha(Base):
     # Pontos concedidos ao participar da campanha.
     pontos_recompensa = Column(Integer, nullable=False, default=0, server_default="0")
 
+    # Informações exibidas ao morador antes da adesão (TSK-MOR-023). São apenas
+    # informativas: elegibilidade e apuração de meta dependem da PD-011.
+    produto_elegivel = Column(String(255), nullable=True)
+    meta_quantidade = Column(Integer, nullable=True)
+    condicoes = Column(Text, nullable=True)
+
     status = Column(String(30), nullable=False, default="ativa", server_default="ativa")
     data_inicio = Column(DateTime(timezone=True), nullable=True)
     data_fim = Column(DateTime(timezone=True), nullable=True)

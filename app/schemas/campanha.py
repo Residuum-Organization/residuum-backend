@@ -12,6 +12,9 @@ class CampanhaCreate(BaseModel):
     patrocinador: str = Field(..., min_length=1, max_length=255)
     patrocinador_logo_url: Optional[str] = Field(default=None, max_length=500)
     pontos_recompensa: int = Field(0, ge=0)
+    produto_elegivel: Optional[str] = Field(default=None, max_length=255)
+    meta_quantidade: Optional[int] = Field(default=None, ge=1)
+    condicoes: Optional[str] = None
     status: str = Field("ativa", max_length=30)
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
@@ -23,6 +26,9 @@ class CampanhaUpdate(BaseModel):
     patrocinador: Optional[str] = Field(None, min_length=1, max_length=255)
     patrocinador_logo_url: Optional[str] = Field(default=None, max_length=500)
     pontos_recompensa: Optional[int] = Field(None, ge=0)
+    produto_elegivel: Optional[str] = Field(default=None, max_length=255)
+    meta_quantidade: Optional[int] = Field(default=None, ge=1)
+    condicoes: Optional[str] = None
     status: Optional[str] = Field(None, max_length=30)
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
@@ -35,6 +41,9 @@ class CampanhaResponse(BaseModel):
     patrocinador: str
     patrocinador_logo_url: Optional[str] = None
     pontos_recompensa: int
+    produto_elegivel: Optional[str] = None
+    meta_quantidade: Optional[int] = None
+    condicoes: Optional[str] = None
     status: str
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None

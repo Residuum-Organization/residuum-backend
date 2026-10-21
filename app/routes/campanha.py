@@ -1,9 +1,11 @@
 """Rotas de campanhas: consulta publica, cadastro (admin) e inscricao (usuario)."""
 
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.decorators import public
@@ -21,6 +23,15 @@ from app.schemas.campanha import (
 )
 
 router = APIRouter(prefix="/campanhas", tags=["Campanhas"])
+
+
+def _bonus_na_adesao() -> bool:
+    """Comportamento herdado: a adesão credita os pontos da campanha na hora.
+
+    A V6 liga o bônus a descarte elegível (PD-011, ainda sem decisão). Enquanto
+    isso, CAMPANHA_BONUS_NA_ADESAO=false registra a adesão sem creditar pontos.
+    """
+    return os.getenv("CAMPANHA_BONUS_NA_ADESAO", "true").strip().lower() not in {"0", "false", "no", "nao"}
 
 
 @router.get("", response_model=list[CampanhaResponse])
@@ -62,6 +73,9 @@ def criar_campanha(
         patrocinador=payload.patrocinador,
         patrocinador_logo_url=payload.patrocinador_logo_url,
         pontos_recompensa=payload.pontos_recompensa,
+        produto_elegivel=payload.produto_elegivel,
+        meta_quantidade=payload.meta_quantidade,
+        condicoes=payload.condicoes,
         status=payload.status,
         data_inicio=payload.data_inicio,
         data_fim=payload.data_fim,
@@ -168,7 +182,7 @@ def participar_campanha(
     if ja_inscrito:
         raise_bad_request("Você já participa desta campanha.")
 
-    pontos = int(campanha.pontos_recompensa or 0)
+    pontos = int(campanha.pontos_recompensa or 0) if _bonus_na_adesao() else 0
 
     inscricao = InscricaoCampanha(
         campanha_id=campanha.id,
@@ -182,7 +196,12 @@ def participar_campanha(
         usuario.pontuacao_total = int(usuario.pontuacao_total or 0) + pontos
         db.add(Pontuacao(pontos=pontos, usuario_id=usuario.id))
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Reenvio simultâneo: a restrição única já garante uma adesão por usuário.
+        db.rollback()
+        raise_bad_request("Você já participa desta campanha.")
     db.refresh(inscricao)
 
     return InscricaoCampanhaResponse(
@@ -193,3 +212,24 @@ def participar_campanha(
         titulo=campanha.titulo,
         patrocinador=campanha.patrocinador,
     )
+
+
+# Declarada por último para não capturar /admin nem /minhas-inscricoes.
+@router.get("/{campanha_id}", response_model=CampanhaResponse)
+@public
+def obter_campanha(campanha_id: int, db: Session = Depends(get_db)):
+    """Detalhe de uma campanha consultável (ativa e dentro da vigência)."""
+    agora = datetime.now(timezone.utc)
+    campanha = (
+        db.query(Campanha)
+        .filter(
+            Campanha.id == campanha_id,
+            Campanha.status == "ativa",
+            or_(Campanha.data_inicio.is_(None), Campanha.data_inicio <= agora),
+            or_(Campanha.data_fim.is_(None), Campanha.data_fim >= agora),
+        )
+        .first()
+    )
+    if not campanha:
+        raise_not_found("Campanha nao encontrada.")
+    return campanha
