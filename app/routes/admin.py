@@ -38,6 +38,7 @@ from app.schemas.admin import (
     UsuarioAdminUpdate,
 )
 from app.services.audit_service import registrar_acao
+from app.services.pontuacao_service import calcular_pontos_proporcionais
 from app.services.serializacao_service import (
     serializar_descarte,
     serializar_usuario_basico,
@@ -471,8 +472,9 @@ def reverter_descarte(
         )
 
     quantidade_confirmada = float(descarte.quantidade_confirmada or 0)
-    # Pontos concedidos na confirmação: 10 por kg confirmado (RF014).
-    pontos_estorno = int(quantidade_confirmada * 10)
+    # Pontos concedidos na confirmação: PONTOS_POR_UNIDADE por unidade confirmada (RF014).
+    # Descartes confirmados antes da mudança de 10 para 5 pontos estornam o valor atual.
+    pontos_estorno = calcular_pontos_proporcionais(quantidade_confirmada, quantidade_confirmada)
 
     usuario = (
         db.query(Usuario).filter(Usuario.id == descarte.usuario_id).first()
