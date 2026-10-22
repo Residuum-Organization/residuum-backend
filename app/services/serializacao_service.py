@@ -159,6 +159,7 @@ def serializar_resgate_pontuacao(resgate: ResgatePontuacao) -> dict[str, Any]:
         "pontos_utilizados": resgate.pontos_utilizados,
         "descricao": resgate.descricao,
         "referencia": resgate.referencia,
+        "origem": resgate.origem,
         "status": resgate.status,
         "data_resgate": resgate.data_resgate,
     }
@@ -167,7 +168,7 @@ def serializar_resgate_pontuacao(resgate: ResgatePontuacao) -> dict[str, Any]:
 def serializar_evento_extrato_resgate(resgate: ResgatePontuacao) -> dict[str, Any]:
     """Converte um resgate em um item de extrato de pontos."""
     return {
-        "origem": "resgate",
+        "origem": resgate.origem or "resgate",
         "status": resgate.status,
         "data_evento": resgate.data_resgate,
         "pontos": -abs(int(resgate.pontos_utilizados or 0)),

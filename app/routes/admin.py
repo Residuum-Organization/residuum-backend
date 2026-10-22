@@ -280,7 +280,14 @@ def ajustar_pontuacao(
     admin: Usuario = Depends(require_role("admin")),
 ):
     """Crédito/débito manual de pontuação. Não permite saldo negativo."""
-    usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
+    # Trava o usuario: o ajuste nao pode perder um debito em andamento.
+    usuario = (
+        db.query(Usuario)
+        .filter(Usuario.id == usuario_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 

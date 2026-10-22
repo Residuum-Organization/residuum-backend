@@ -3,18 +3,17 @@
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.decorators import public
-from app.core.exceptions import raise_bad_request, raise_not_found
+from app.core.exceptions import raise_bad_request, raise_conflict, raise_not_found
 from app.database import get_db
 from app.dependencies.auth import get_current_user, require_role
 from app.models.bilhete_sorteio import BilheteSorteio
 from app.models.audit_log import AuditLog
 from app.models.descarte import Descarte
-from app.models.resgate_pontuacao import ResgatePontuacao
 from app.models.sorteio import Sorteio
 from app.models.usuario import Usuario
 from app.schemas.sorteio import (
@@ -24,6 +23,12 @@ from app.schemas.sorteio import (
     SorteioResponse,
 )
 from app.services.audit_service import registrar_acao
+from app.services.saldo_service import (
+    ORIGEM_SORTEIO,
+    SaldoInsuficiente,
+    debitar_pontos,
+    travar_usuario,
+)
 
 router = APIRouter(prefix="/sorteios", tags=["Sorteios"])
 
@@ -52,6 +57,18 @@ def _usuario_validou_descarte_por_gps(usuario_id: int, db: Session) -> bool:
         )
         .first()
         is not None
+    )
+
+
+def _resposta_bilhete(bilhete: BilheteSorteio, sorteio: Sorteio | None) -> BilheteSorteioResponse:
+    return BilheteSorteioResponse(
+        id=bilhete.id,
+        sorteio_id=bilhete.sorteio_id,
+        numero=bilhete.numero,
+        pontos_utilizados=bilhete.pontos_utilizados,
+        criado_em=bilhete.criado_em,
+        titulo=sorteio.titulo if sorteio else None,
+        premio=sorteio.premio if sorteio else None,
     )
 
 
@@ -211,18 +228,7 @@ def listar_meus_bilhetes(
         .order_by(BilheteSorteio.criado_em.desc())
         .all()
     )
-    return [
-        BilheteSorteioResponse(
-            id=b.id,
-            sorteio_id=b.sorteio_id,
-            numero=b.numero,
-            pontos_utilizados=b.pontos_utilizados,
-            criado_em=b.criado_em,
-            titulo=b.sorteio.titulo if b.sorteio else None,
-            premio=b.sorteio.premio if b.sorteio else None,
-        )
-        for b in bilhetes
-    ]
+    return [_resposta_bilhete(b, b.sorteio) for b in bilhetes]
 
 
 @router.post(
@@ -232,8 +238,10 @@ def listar_meus_bilhetes(
 )
 def comprar_bilhete(
     sorteio_id: int,
+    response: Response,
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
+    chave: str | None = Header(default=None, alias="Idempotency-Key", max_length=80),
 ):
     """Compra um bilhete de sorteio.
 
@@ -241,7 +249,9 @@ def comprar_bilhete(
     - somente 1 bilhete por usuário por sorteio;
     - o usuário precisa ter validado um descarte por presença (GPS);
     - o custo em pontos é debitado do saldo da carteira com segurança;
-    - o bilhete recebe uma numeração sequencial dentro do sorteio.
+    - o bilhete recebe uma numeração sequencial dentro do sorteio;
+    - com o cabeçalho Idempotency-Key, reenviar o mesmo pedido devolve o
+      bilhete já comprado (200) em vez de falhar ou debitar de novo.
     """
     # Bloqueia a linha do sorteio para serializar a numeração dos bilhetes.
     sorteio = (
@@ -252,6 +262,24 @@ def comprar_bilhete(
     )
     if not sorteio:
         raise_not_found("Sorteio nao encontrado.")
+
+    # Trava o usuario antes de olhar a chave: pedidos paralelos do mesmo
+    # morador passam um de cada vez.
+    travar_usuario(db, usuario.id)
+    if chave:
+        anterior = (
+            db.query(BilheteSorteio)
+            .filter(
+                BilheteSorteio.usuario_id == usuario.id,
+                BilheteSorteio.chave_idempotencia == chave,
+            )
+            .first()
+        )
+        if anterior:
+            if anterior.sorteio_id != sorteio.id:
+                raise_conflict("Chave de idempotencia ja usada em outra compra.")
+            response.status_code = 200
+            return _resposta_bilhete(anterior, sorteio)
 
     agora = datetime.now(timezone.utc)
     if sorteio.status != "ativo":
@@ -276,10 +304,6 @@ def comprar_bilhete(
     if ja_possui:
         raise_bad_request("Você já possui um bilhete neste sorteio.")
 
-    saldo_atual = int(usuario.pontuacao_total or 0)
-    if sorteio.custo_pontos > saldo_atual:
-        raise_bad_request("Pontuacao insuficiente para comprar o bilhete.")
-
     # Numeração sequencial dentro do sorteio (linha do sorteio já bloqueada).
     maior_numero = (
         db.query(func.coalesce(func.max(BilheteSorteio.numero), 0))
@@ -288,40 +312,32 @@ def comprar_bilhete(
     )
     numero = int(maior_numero) + 1
 
-    # Debita pontos com segurança.
-    usuario.pontuacao_total = saldo_atual - sorteio.custo_pontos
+    # Debita pontos (saldo travado) e registra no extrato com a origem.
+    try:
+        debitar_pontos(
+            db,
+            usuario.id,
+            sorteio.custo_pontos,
+            origem=ORIGEM_SORTEIO,
+            descricao=f"Bilhete do sorteio: {sorteio.titulo}",
+            referencia=f"sorteio:{sorteio.id}:bilhete:{numero}",
+        )
+    except SaldoInsuficiente:
+        raise_bad_request("Pontuacao insuficiente para comprar o bilhete.")
 
     bilhete = BilheteSorteio(
         sorteio_id=sorteio.id,
         usuario_id=usuario.id,
         numero=numero,
         pontos_utilizados=sorteio.custo_pontos,
+        chave_idempotencia=chave or None,
     )
     db.add(bilhete)
-
-    # Registra no extrato de pontos unificado.
-    db.add(
-        ResgatePontuacao(
-            usuario_id=usuario.id,
-            pontos_utilizados=sorteio.custo_pontos,
-            descricao=f"Bilhete do sorteio: {sorteio.titulo}",
-            referencia=f"sorteio:{sorteio.id}:bilhete:{numero}",
-            status="resgatado",
-        )
-    )
 
     db.commit()
     db.refresh(bilhete)
 
-    return BilheteSorteioResponse(
-        id=bilhete.id,
-        sorteio_id=bilhete.sorteio_id,
-        numero=bilhete.numero,
-        pontos_utilizados=bilhete.pontos_utilizados,
-        criado_em=bilhete.criado_em,
-        titulo=sorteio.titulo,
-        premio=sorteio.premio,
-    )
+    return _resposta_bilhete(bilhete, sorteio)
 
 
 @router.get("/{sorteio_id}", response_model=SorteioResponse)

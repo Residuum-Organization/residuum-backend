@@ -3,15 +3,14 @@
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.decorators import public
-from app.core.exceptions import raise_bad_request, raise_not_found
+from app.core.exceptions import raise_bad_request, raise_conflict, raise_not_found
 from app.database import get_db
 from app.dependencies.auth import get_current_user, require_role
-from app.models.resgate_pontuacao import ResgatePontuacao
 from app.models.resgate_voucher import ResgateVoucher
 from app.models.usuario import Usuario
 from app.models.voucher import Voucher
@@ -21,6 +20,12 @@ from app.schemas.voucher import (
     VoucherUpdate,
     VoucherResponse,
 )
+from app.services.saldo_service import (
+    ORIGEM_VOUCHER,
+    SaldoInsuficiente,
+    debitar_pontos,
+    travar_usuario,
+)
 
 router = APIRouter(prefix="/vouchers", tags=["Vouchers"])
 
@@ -28,6 +33,19 @@ router = APIRouter(prefix="/vouchers", tags=["Vouchers"])
 def _gerar_codigo_promocional() -> str:
     """Gera um codigo promocional legivel e unico por resgate."""
     return f"RSDM-{secrets.token_hex(4).upper()}"
+
+
+def _resposta_resgate(resgate: ResgateVoucher, voucher: Voucher | None) -> ResgateVoucherResponse:
+    return ResgateVoucherResponse(
+        id=resgate.id,
+        voucher_id=resgate.voucher_id,
+        codigo=resgate.codigo,
+        pontos_utilizados=resgate.pontos_utilizados,
+        status=resgate.status,
+        criado_em=resgate.criado_em,
+        titulo=voucher.titulo if voucher else None,
+        parceiro=voucher.parceiro if voucher else None,
+    )
 
 
 @router.get("", response_model=list[VoucherResponse])
@@ -120,10 +138,16 @@ def deletar_voucher(
 @router.post("/{voucher_id}/resgatar", response_model=ResgateVoucherResponse, status_code=201)
 def resgatar_voucher(
     voucher_id: int,
+    response: Response,
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
+    chave: str | None = Header(default=None, alias="Idempotency-Key", max_length=80),
 ):
-    """Resgata um voucher: debita os pontos e devolve um codigo promocional."""
+    """Resgata um voucher: debita os pontos e devolve um codigo promocional.
+
+    Com o cabecalho Idempotency-Key, reenviar o mesmo pedido devolve o resgate
+    ja feito (200) em vez de debitar de novo.
+    """
     # Bloqueia a linha do voucher para evitar corrida na quantidade disponivel.
     voucher = (
         db.query(Voucher)
@@ -133,6 +157,24 @@ def resgatar_voucher(
     )
     if not voucher:
         raise_not_found("Voucher nao encontrado.")
+
+    # Trava o usuario antes de olhar a chave: pedidos paralelos do mesmo
+    # morador passam um de cada vez.
+    travar_usuario(db, usuario.id)
+    if chave:
+        anterior = (
+            db.query(ResgateVoucher)
+            .filter(
+                ResgateVoucher.usuario_id == usuario.id,
+                ResgateVoucher.chave_idempotencia == chave,
+            )
+            .first()
+        )
+        if anterior:
+            if anterior.voucher_id != voucher.id:
+                raise_conflict("Chave de idempotencia ja usada em outro resgate.")
+            response.status_code = 200
+            return _resposta_resgate(anterior, voucher)
 
     agora = datetime.now(timezone.utc)
     if voucher.status != "ativo":
@@ -144,48 +186,35 @@ def resgatar_voucher(
     if (voucher.quantidade_disponivel or 0) <= 0:
         raise_bad_request("Voucher esgotado.")
 
-    saldo_atual = int(usuario.pontuacao_total or 0)
-    if voucher.custo_pontos > saldo_atual:
+    codigo = _gerar_codigo_promocional()
+    # Debita pontos (saldo travado) e registra no extrato com a origem.
+    try:
+        debitar_pontos(
+            db,
+            usuario.id,
+            voucher.custo_pontos,
+            origem=ORIGEM_VOUCHER,
+            descricao=f"Resgate de voucher: {voucher.titulo}",
+            referencia=codigo,
+        )
+    except SaldoInsuficiente:
         raise_bad_request("Pontuacao insuficiente para resgatar este voucher.")
 
-    # Debita pontos e decrementa o estoque do voucher.
-    usuario.pontuacao_total = saldo_atual - voucher.custo_pontos
     voucher.quantidade_disponivel = voucher.quantidade_disponivel - 1
-
-    codigo = _gerar_codigo_promocional()
     resgate = ResgateVoucher(
         voucher_id=voucher.id,
         usuario_id=usuario.id,
         codigo=codigo,
         pontos_utilizados=voucher.custo_pontos,
         status="ativo",
+        chave_idempotencia=chave or None,
     )
     db.add(resgate)
-
-    # Registra no extrato de pontos unificado.
-    db.add(
-        ResgatePontuacao(
-            usuario_id=usuario.id,
-            pontos_utilizados=voucher.custo_pontos,
-            descricao=f"Resgate de voucher: {voucher.titulo}",
-            referencia=codigo,
-            status="resgatado",
-        )
-    )
 
     db.commit()
     db.refresh(resgate)
 
-    return ResgateVoucherResponse(
-        id=resgate.id,
-        voucher_id=resgate.voucher_id,
-        codigo=resgate.codigo,
-        pontos_utilizados=resgate.pontos_utilizados,
-        status=resgate.status,
-        criado_em=resgate.criado_em,
-        titulo=voucher.titulo,
-        parceiro=voucher.parceiro,
-    )
+    return _resposta_resgate(resgate, voucher)
 
 
 @router.get("/meus-resgates", response_model=list[ResgateVoucherResponse])
@@ -200,16 +229,4 @@ def listar_meus_resgates_voucher(
         .order_by(ResgateVoucher.criado_em.desc())
         .all()
     )
-    return [
-        ResgateVoucherResponse(
-            id=r.id,
-            voucher_id=r.voucher_id,
-            codigo=r.codigo,
-            pontos_utilizados=r.pontos_utilizados,
-            status=r.status,
-            criado_em=r.criado_em,
-            titulo=r.voucher.titulo if r.voucher else None,
-            parceiro=r.voucher.parceiro if r.voucher else None,
-        )
-        for r in resgates
-    ]
+    return [_resposta_resgate(r, r.voucher) for r in resgates]
