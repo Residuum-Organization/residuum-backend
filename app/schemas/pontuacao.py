@@ -28,6 +28,7 @@ class ResgatePontuacaoResponse(BaseModel):
     pontos_utilizados: int
     descricao: str
     referencia: Optional[str]
+    origem: str = "resgate"
     status: str
     data_resgate: datetime
 

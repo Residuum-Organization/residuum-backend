@@ -19,6 +19,7 @@ from app.routes.descarte import confirmar_descarte
 from app.routes.inventario_usuario import transferir_itens_em_lote
 from app.schemas.descarte import DescarteConfirmar
 from app.schemas.inventario_usuario import InventarioLoteTransferir
+from app.services.pontuacao_service import PONTOS_POR_UNIDADE
 
 
 class TransferenciaLoteIntegracaoTestCase(unittest.TestCase):
@@ -223,7 +224,7 @@ class TransferenciaLoteIntegracaoTestCase(unittest.TestCase):
 
         self.session.refresh(self.usuario)
         self.session.refresh(self.ponto)
-        self.assertEqual(self.usuario.pontuacao_total, 20)
+        self.assertEqual(self.usuario.pontuacao_total, 2 * PONTOS_POR_UNIDADE)
         self.assertEqual(self.ponto.inventario["plastico"], 2)
         self.assertEqual(self.session.query(Pontuacao).count(), 2)
 

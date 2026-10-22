@@ -21,6 +21,7 @@ class ResgatePontuacao(Base):
     pontos_utilizados = Column(Integer, nullable=False)
     descricao = Column(String(255), nullable=False)
     referencia = Column(String(255), nullable=True)
+    origem = Column(String(20), nullable=False, default="resgate", server_default="resgate")
     status = Column(String(20), nullable=False, default="resgatado", server_default="resgatado")
     data_resgate = Column(DateTime(timezone=True), server_default=func.now())
 

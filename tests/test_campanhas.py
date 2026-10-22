@@ -22,6 +22,7 @@ from app.routes.campanha import (
 )
 from app.schemas.campanha import MecanicaInput, RequisitoInput
 from app.services import campanha_service
+from app.services.pontuacao_service import PONTOS_POR_UNIDADE
 
 COCA = "7894900011517"
 
@@ -284,17 +285,17 @@ class CampanhaTestCase(unittest.TestCase):
         self._descarte(quantidade=4, quando=self._apos_adesao())
         depois = progresso_campanha(campanha.id, self.session, self.usuario)["mecanicas"][0]
         self.assertTrue(depois["disponivel"])
-        # bonus = pontos basicos das 4 unidades da meta (10 por unidade)
-        self.assertEqual(depois["pontos"], 40)
+        # bonus = pontos basicos das 4 unidades da meta
+        self.assertEqual(depois["pontos"], 4 * PONTOS_POR_UNIDADE)
 
         bonus = receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
-        self.assertEqual(bonus.pontos, 40)
-        self.assertEqual(self.usuario.pontuacao_total, 40)
+        self.assertEqual(bonus.pontos, 4 * PONTOS_POR_UNIDADE)
+        self.assertEqual(self.usuario.pontuacao_total, 4 * PONTOS_POR_UNIDADE)
 
         with self.assertRaises(HTTPException) as repetido:
             receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
         self.assertEqual(repetido.exception.status_code, 400)
-        self.assertEqual(self.usuario.pontuacao_total, 40)
+        self.assertEqual(self.usuario.pontuacao_total, 4 * PONTOS_POR_UNIDADE)
 
     def test_dobro_de_pontos_exige_participar(self):
         campanha = self._campanha(mecanicas=[self._dobro(quantidade=1)])
@@ -331,7 +332,7 @@ class CampanhaTestCase(unittest.TestCase):
 
         self._descarte(quantidade=3, quando=self._apos_adesao())
         bonus = receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
-        self.assertEqual(bonus.pontos, 20)
+        self.assertEqual(bonus.pontos, 2 * PONTOS_POR_UNIDADE)
 
     def test_missoes_e_dobro_funcionam_de_forma_independente(self):
         campanha = self._campanha(
@@ -350,7 +351,7 @@ class CampanhaTestCase(unittest.TestCase):
 
         self._descarte(quantidade=2, quando=self._apos_adesao())
         receber_bonus_mecanica(campanha.id, "dobro_pontos", self.session, self.usuario)
-        self.assertEqual(self.usuario.pontuacao_total, 80)
+        self.assertEqual(self.usuario.pontuacao_total, 50 + 3 * PONTOS_POR_UNIDADE)
 
     def test_configuracao_de_mecanica_invalida_e_rejeitada(self):
         invalidas = [

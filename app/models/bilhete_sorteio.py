@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    String,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -25,6 +26,8 @@ class BilheteSorteio(Base):
         UniqueConstraint("sorteio_id", "usuario_id", name="uq_bilhete_sorteio_usuario"),
         # Numeração única dentro do sorteio.
         UniqueConstraint("sorteio_id", "numero", name="uq_bilhete_sorteio_numero"),
+        # Reenvio com a mesma chave devolve o bilhete existente.
+        UniqueConstraint("usuario_id", "chave_idempotencia", name="uq_bilhete_sorteio_chave"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -33,6 +36,7 @@ class BilheteSorteio(Base):
 
     numero = Column(Integer, nullable=False)
     pontos_utilizados = Column(Integer, nullable=False)
+    chave_idempotencia = Column(String(80), nullable=True)
 
     criado_em = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

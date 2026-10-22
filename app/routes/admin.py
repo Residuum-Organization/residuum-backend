@@ -38,6 +38,7 @@ from app.schemas.admin import (
     UsuarioAdminUpdate,
 )
 from app.services.audit_service import registrar_acao
+from app.services.pontuacao_service import calcular_pontos_proporcionais
 from app.services.serializacao_service import (
     serializar_descarte,
     serializar_usuario_basico,
@@ -280,7 +281,14 @@ def ajustar_pontuacao(
     admin: Usuario = Depends(require_role("admin")),
 ):
     """Crédito/débito manual de pontuação. Não permite saldo negativo."""
-    usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
+    # Trava o usuario: o ajuste nao pode perder um debito em andamento.
+    usuario = (
+        db.query(Usuario)
+        .filter(Usuario.id == usuario_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
@@ -464,8 +472,9 @@ def reverter_descarte(
         )
 
     quantidade_confirmada = float(descarte.quantidade_confirmada or 0)
-    # Pontos concedidos na confirmação: 10 por kg confirmado (RF014).
-    pontos_estorno = int(quantidade_confirmada * 10)
+    # Pontos concedidos na confirmação: PONTOS_POR_UNIDADE por unidade confirmada (RF014).
+    # Descartes confirmados antes da mudança de 10 para 5 pontos estornam o valor atual.
+    pontos_estorno = calcular_pontos_proporcionais(quantidade_confirmada, quantidade_confirmada)
 
     usuario = (
         db.query(Usuario).filter(Usuario.id == descarte.usuario_id).first()

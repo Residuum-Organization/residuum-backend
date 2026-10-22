@@ -173,7 +173,7 @@ async def confirmar_descarte(
     Confirma o descarte e calcula pontos (RF014).
     
     Apenas admin ou a conta do ponto de coleta podem confirmar.
-    O sistema calcula 10 pontos por cada 1kg confirmado.
+    O sistema calcula PONTOS_POR_UNIDADE (hoje 5) pontos por unidade confirmada.
     """
     descarte = db.query(Descarte).filter(Descarte.id_descarte == id_descarte).first()
     if not descarte:

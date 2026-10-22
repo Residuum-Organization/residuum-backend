@@ -14,6 +14,7 @@ from app.schemas.pontuacao import (
     ResgatePontuacaoResponse,
 )
 from app.services.extrato_pontos_service import montar_extrato_pontos_usuario
+from app.services.saldo_service import ORIGEM_RESGATE, SaldoInsuficiente, debitar_pontos
 from app.services.serializacao_service import serializar_resgate_pontuacao
 
 router = APIRouter(prefix="/pontuacao", tags=["Pontuação"])
@@ -51,20 +52,17 @@ def registrar_resgate_pontos(
     usuario: Usuario = Depends(get_current_user),
 ):
     """Consome pontos do usuario e registra um evento com status `resgatado`."""
-    saldo_atual = int(usuario.pontuacao_total or 0)
-    if payload.pontos > saldo_atual:
+    try:
+        resgate = debitar_pontos(
+            db,
+            usuario.id,
+            payload.pontos,
+            origem=ORIGEM_RESGATE,
+            descricao=payload.descricao,
+            referencia=payload.referencia,
+        )
+    except SaldoInsuficiente:
         raise_bad_request("Pontuação insuficiente para concluir o resgate.")
-
-    usuario.pontuacao_total = saldo_atual - payload.pontos
-
-    resgate = ResgatePontuacao(
-        usuario_id=usuario.id,
-        pontos_utilizados=payload.pontos,
-        descricao=payload.descricao,
-        referencia=payload.referencia,
-        status="resgatado",
-    )
-    db.add(resgate)
     db.commit()
     db.refresh(resgate)
 
