@@ -13,12 +13,20 @@ from app.database import get_db
 from app.dependencies.auth import get_current_user, require_role
 from app.models.resgate_voucher import ResgateVoucher
 from app.models.usuario import Usuario
-from app.models.voucher import Voucher
+from app.models.voucher import Voucher, VoucherCodigo
 from app.schemas.voucher import (
     ResgateVoucherResponse,
+    VoucherCodigosCreate,
+    VoucherCodigosResponse,
     VoucherCreate,
+    VoucherDetalheResponse,
     VoucherUpdate,
     VoucherResponse,
+)
+from app.services.voucher_service import (
+    calcular_validade,
+    montar_instrucoes,
+    status_do_resgate,
 )
 from app.services.saldo_service import (
     ORIGEM_VOUCHER,
@@ -35,14 +43,20 @@ def _gerar_codigo_promocional() -> str:
     return f"RSDM-{secrets.token_hex(4).upper()}"
 
 
+def _usa_codigos_do_parceiro(db: Session, voucher_id: int) -> bool:
+    return db.query(VoucherCodigo.id).filter(VoucherCodigo.voucher_id == voucher_id).first() is not None
+
+
 def _resposta_resgate(resgate: ResgateVoucher, voucher: Voucher | None) -> ResgateVoucherResponse:
     return ResgateVoucherResponse(
         id=resgate.id,
         voucher_id=resgate.voucher_id,
         codigo=resgate.codigo,
         pontos_utilizados=resgate.pontos_utilizados,
-        status=resgate.status,
+        status=status_do_resgate(resgate),
         criado_em=resgate.criado_em,
+        valido_ate=resgate.valido_ate,
+        instrucoes_uso=montar_instrucoes(voucher, resgate.valido_ate) if voucher else None,
         titulo=voucher.titulo if voucher else None,
         parceiro=voucher.parceiro if voucher else None,
     )
@@ -89,6 +103,8 @@ def criar_voucher(
         custo_pontos=payload.custo_pontos,
         quantidade_disponivel=payload.quantidade_disponivel,
         status=payload.status,
+        instrucoes=payload.instrucoes,
+        validade_codigo_dias=payload.validade_codigo_dias,
         data_inicio=payload.data_inicio,
         data_fim=payload.data_fim,
     )
@@ -186,7 +202,20 @@ def resgatar_voucher(
     if (voucher.quantidade_disponivel or 0) <= 0:
         raise_bad_request("Voucher esgotado.")
 
-    codigo = _gerar_codigo_promocional()
+    # Voucher com codigos do parceiro entrega um deles; sem codigos cadastrados,
+    # o sistema gera um codigo proprio (comportamento anterior).
+    codigo_parceiro = None
+    if _usa_codigos_do_parceiro(db, voucher.id):
+        codigo_parceiro = (
+            db.query(VoucherCodigo)
+            .filter(VoucherCodigo.voucher_id == voucher.id, VoucherCodigo.status == "disponivel")
+            .order_by(VoucherCodigo.id)
+            .first()
+        )
+        if codigo_parceiro is None:
+            raise_bad_request("Voucher esgotado.")
+    codigo = codigo_parceiro.codigo if codigo_parceiro else _gerar_codigo_promocional()
+
     # Debita pontos (saldo travado) e registra no extrato com a origem.
     try:
         debitar_pontos(
@@ -208,8 +237,13 @@ def resgatar_voucher(
         pontos_utilizados=voucher.custo_pontos,
         status="ativo",
         chave_idempotencia=chave or None,
+        valido_ate=calcular_validade(voucher, agora),
     )
     db.add(resgate)
+    if codigo_parceiro is not None:
+        db.flush()
+        codigo_parceiro.status = "resgatado"
+        codigo_parceiro.resgate_id = resgate.id
 
     db.commit()
     db.refresh(resgate)
@@ -230,3 +264,114 @@ def listar_meus_resgates_voucher(
         .all()
     )
     return [_resposta_resgate(r, r.voucher) for r in resgates]
+
+
+@router.get("/{voucher_id}", response_model=VoucherDetalheResponse)
+@public
+def obter_voucher(voucher_id: int, db: Session = Depends(get_db)):
+    """Detalhe de um voucher, com as instrucoes de uso."""
+    agora = datetime.now(timezone.utc)
+    voucher = (
+        db.query(Voucher)
+        .filter(
+            Voucher.id == voucher_id,
+            Voucher.status == "ativo",
+            or_(Voucher.data_inicio.is_(None), Voucher.data_inicio <= agora),
+            or_(Voucher.data_fim.is_(None), Voucher.data_fim >= agora),
+        )
+        .first()
+    )
+    if not voucher:
+        raise_not_found("Voucher nao encontrado.")
+    base = VoucherResponse.model_validate(voucher).model_dump()
+    return VoucherDetalheResponse(**base, instrucoes_uso=montar_instrucoes(voucher))
+
+
+@router.get("/{voucher_id}/codigos", response_model=VoucherCodigosResponse)
+def listar_codigos_voucher(
+    voucher_id: int,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Codigos do parceiro cadastrados no voucher, com o que ja foi entregue."""
+    if not db.query(Voucher.id).filter(Voucher.id == voucher_id).first():
+        raise_not_found("Voucher nao encontrado.")
+    codigos = (
+        db.query(VoucherCodigo)
+        .filter(VoucherCodigo.voucher_id == voucher_id)
+        .order_by(VoucherCodigo.id)
+        .all()
+    )
+    return VoucherCodigosResponse(
+        disponiveis=sum(1 for c in codigos if c.status == "disponivel"),
+        resgatados=sum(1 for c in codigos if c.status == "resgatado"),
+        codigos=codigos,
+    )
+
+
+@router.post("/{voucher_id}/codigos", response_model=VoucherCodigosResponse, status_code=201)
+def adicionar_codigos_voucher(
+    voucher_id: int,
+    payload: VoucherCodigosCreate,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Cadastra os codigos enviados pelo parceiro. Cada codigo soma 1 ao estoque."""
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).with_for_update().first()
+    if not voucher:
+        raise_not_found("Voucher nao encontrado.")
+
+    novos = []
+    for bruto in payload.codigos:
+        codigo = bruto.strip()
+        if not codigo:
+            continue
+        if len(codigo) > 40:
+            raise_bad_request(f"Codigo maior que 40 caracteres: {codigo[:20]}...")
+        if codigo not in novos:
+            novos.append(codigo)
+    if not novos:
+        raise_bad_request("Nenhum codigo informado.")
+
+    existentes = {
+        c
+        for (c,) in db.query(VoucherCodigo.codigo).filter(VoucherCodigo.codigo.in_(novos)).all()
+    } | {
+        c
+        for (c,) in db.query(ResgateVoucher.codigo).filter(ResgateVoucher.codigo.in_(novos)).all()
+    }
+    if existentes:
+        raise_conflict("Codigos ja cadastrados: " + ", ".join(sorted(existentes)[:10]))
+
+    for codigo in novos:
+        db.add(VoucherCodigo(voucher_id=voucher.id, codigo=codigo, status="disponivel"))
+    voucher.quantidade_disponivel = (voucher.quantidade_disponivel or 0) + len(novos)
+    db.commit()
+    return listar_codigos_voucher(voucher_id, db, admin)
+
+
+@router.delete("/{voucher_id}/codigos/{codigo_id}", status_code=204)
+def remover_codigo_voucher(
+    voucher_id: int,
+    codigo_id: int,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(require_role("admin")),
+):
+    """Remove um codigo que ainda nao foi entregue e tira 1 do estoque."""
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).with_for_update().first()
+    if not voucher:
+        raise_not_found("Voucher nao encontrado.")
+    codigo = (
+        db.query(VoucherCodigo)
+        .filter(VoucherCodigo.id == codigo_id, VoucherCodigo.voucher_id == voucher_id)
+        .first()
+    )
+    if not codigo:
+        raise_not_found("Codigo nao encontrado.")
+    if codigo.status != "disponivel":
+        raise_bad_request("Este codigo ja foi entregue a um morador.")
+
+    db.delete(codigo)
+    voucher.quantidade_disponivel = max((voucher.quantidade_disponivel or 0) - 1, 0)
+    db.commit()
+    return None

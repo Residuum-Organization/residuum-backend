@@ -13,6 +13,8 @@ class VoucherCreate(BaseModel):
     custo_pontos: int = Field(..., ge=0)
     quantidade_disponivel: int = Field(0, ge=0)
     status: str = Field("ativo", max_length=30)
+    instrucoes: Optional[str] = Field(None, max_length=2000)
+    validade_codigo_dias: Optional[int] = Field(None, ge=1, le=3650)
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
 
@@ -24,6 +26,8 @@ class VoucherUpdate(BaseModel):
     custo_pontos: Optional[int] = Field(None, ge=0)
     quantidade_disponivel: Optional[int] = Field(None, ge=0)
     status: Optional[str] = Field(None, max_length=30)
+    instrucoes: Optional[str] = Field(None, max_length=2000)
+    validade_codigo_dias: Optional[int] = Field(None, ge=1, le=3650)
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
 
@@ -35,6 +39,8 @@ class ResgateVoucherResponse(BaseModel):
     pontos_utilizados: int
     status: str
     criado_em: datetime
+    valido_ate: Optional[datetime] = None
+    instrucoes_uso: Optional[str] = None
     titulo: Optional[str] = None
     parceiro: Optional[str] = None
 
@@ -50,6 +56,8 @@ class VoucherResponse(BaseModel):
     custo_pontos: int
     quantidade_disponivel: int
     status: str
+    instrucoes: str | None = None
+    validade_codigo_dias: int | None = None
     data_inicio: datetime | None = None
     data_fim: datetime | None = None
     criado_em: datetime
@@ -57,3 +65,29 @@ class VoucherResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class VoucherDetalheResponse(VoucherResponse):
+    """Detalhe para o morador: inclui as instrucoes de uso prontas para exibir."""
+
+    instrucoes_uso: str
+
+
+class VoucherCodigosCreate(BaseModel):
+    codigos: list[str] = Field(..., min_length=1, max_length=1000)
+
+
+class VoucherCodigoResponse(BaseModel):
+    id: int
+    codigo: str
+    status: str
+    criado_em: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class VoucherCodigosResponse(BaseModel):
+    disponiveis: int
+    resgatados: int
+    codigos: list[VoucherCodigoResponse]

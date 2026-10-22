@@ -26,6 +26,7 @@ class ResgateVoucher(Base):
     pontos_utilizados = Column(Integer, nullable=False)
     status = Column(String(20), nullable=False, default="ativo", server_default="ativo")
     chave_idempotencia = Column(String(80), nullable=True)
+    valido_ate = Column(DateTime(timezone=True), nullable=True)
 
     criado_em = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

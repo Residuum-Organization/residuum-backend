@@ -11,3 +11,5 @@ class Notificacao(Base):
     lida = Column(Boolean, default=False)
     criado_em = Column(DateTime(timezone=True), default=datetime.utcnow)
     ponto_coleta_id = Column(Integer, ForeignKey("ponto_coleta.id"), nullable=True)
+    # Preenchido nos avisos para o morador; vazio nos alertas operacionais.
+    usuario_id = Column(Integer, ForeignKey("usuario.id"), nullable=True, index=True)

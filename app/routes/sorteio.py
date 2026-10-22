@@ -23,6 +23,7 @@ from app.schemas.sorteio import (
     SorteioResponse,
 )
 from app.services.audit_service import registrar_acao
+from app.services.notificacao_service import notificar_usuario
 from app.services.saldo_service import (
     ORIGEM_SORTEIO,
     SaldoInsuficiente,
@@ -70,6 +71,25 @@ def _resposta_bilhete(bilhete: BilheteSorteio, sorteio: Sorteio | None) -> Bilhe
         titulo=sorteio.titulo if sorteio else None,
         premio=sorteio.premio if sorteio else None,
     )
+
+
+def _notificar_participantes(
+    db: Session, sorteio: Sorteio, vencedor: BilheteSorteio, bilhetes: list[BilheteSorteio]
+) -> None:
+    """Aviso simples: o ganhador recebe o premio; os demais, que ha resultado."""
+    notificar_usuario(
+        db,
+        vencedor.usuario_id,
+        f"Parabéns! Você ganhou o sorteio '{sorteio.titulo}': {sorteio.premio} (bilhete nº {vencedor.numero}).",
+        "sorteio_ganhador",
+    )
+    for usuario_id in sorted({b.usuario_id for b in bilhetes} - {vencedor.usuario_id}):
+        notificar_usuario(
+            db,
+            usuario_id,
+            f"O sorteio '{sorteio.titulo}' foi apurado. Veja o resultado na Loja.",
+            "sorteio_resultado",
+        )
 
 
 def _obter_resultado(sorteio_id: int, db: Session):
@@ -144,6 +164,7 @@ def sortear_vencedor(
         "vencedor_nome": vencedor.usuario.nome if vencedor.usuario else None,
     }
     sorteio.status = "encerrado"
+    _notificar_participantes(db, sorteio, vencedor, bilhetes)
     registro = registrar_acao(
         db,
         admin_id=admin.id,

@@ -18,3 +18,10 @@ def verificar_capacidade_e_notificar(db: Session, ponto: PontoColeta):
             
             db.add(nova_notificacao)
             db.commit()
+
+
+def notificar_usuario(db: Session, usuario_id: int, mensagem: str, tipo: str) -> Notificacao:
+    """Cria um aviso para um morador. Nao faz commit."""
+    notificacao = Notificacao(mensagem=mensagem, tipo=tipo, usuario_id=usuario_id)
+    db.add(notificacao)
+    return notificacao
